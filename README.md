@@ -1,6 +1,6 @@
 # SorI/O
 
-An adaptation from MarI/O by SethBling
+Original from MarI/O by SethBling
 Adapted by gsaurus
 
 "MarI/O is a program made of neural networks and genetic algorithms that
@@ -11,5 +11,8 @@ Source Code by SethBling: http://pastebin.com/ZZmSNaHX
 SorI/O separates the algorithm from game specific configuration,
 making it easier to adapt to other games.
 
-SorI/O currently includes learning modules to:
+Intended for use with the BizHawk emulator.
+
+
+Includes learning modules to:
 * Streets of Rage 2
