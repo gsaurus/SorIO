@@ -55,8 +55,8 @@ module.updateInput = function(input)
 
 		local rows = math.floor(math.sqrt(#input));
         local columns = math.ceil(1.0 * #input / rows);
-        local frameWidth = screenWidth / columns;
-        local frameHeight = math.min(screenHeight / rows, frameWidth * 9 / 16);
+        local frameWidth = screenWidth / (columns + 1);
+        local frameHeight = math.min(screenHeight / (rows + 1), frameWidth * 9 / 16);
 
 		local count = 1
         for y = 0, rows do
