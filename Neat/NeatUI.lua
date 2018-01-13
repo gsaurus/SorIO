@@ -29,6 +29,7 @@ local form
 local maxFitnessLabel
 local showInputCheckbox
 local showRealtimeFitnessCheckbox
+local previousInput
 
 
 module.updateFitness = function(fitness)
@@ -46,28 +47,42 @@ module.updateFitness = function(fitness)
 end
 
 
+
+module.displayInput = function(input)
+	local backgroundColor = 0xE0FFFFFF
+	local screenWidth = client.bufferwidth()
+	local screenHeight = client.bufferheight()
+	gui.drawBox(0, 0, screenWidth, screenHeight, backgroundColor, backgroundColor)
+
+	local rows = math.floor(math.sqrt(#input));
+	local columns = math.ceil(1.0 * #input / rows);
+	local frameWidth = screenWidth / (columns + 1);
+	local frameHeight = math.min(screenHeight / (rows + 1), frameWidth * 9 / 16);
+
+	local count = 1
+	for y = 0, rows do
+		for x = 0, columns do
+			if count > #input then
+				break
+			end
+			gui.drawText(x * frameWidth, y * frameHeight, input[count], 0xFF000000, 11)
+			count = count + 1
+		end
+	end
+end
+
+
 module.updateInput = function(input)
 	if forms.ischecked(showInputCheckbox) then
-		local backgroundColor = 0xE0FFFFFF
-		local screenWidth = client.bufferwidth()
-		local screenHeight = client.bufferheight()
-		gui.drawBox(0, 0, screenWidth, screenHeight, backgroundColor, backgroundColor)
-
-		local rows = math.floor(math.sqrt(#input));
-        local columns = math.ceil(1.0 * #input / rows);
-        local frameWidth = screenWidth / (columns + 1);
-        local frameHeight = math.min(screenHeight / (rows + 1), frameWidth * 9 / 16);
-
-		local count = 1
-        for y = 0, rows do
-            for x = 0, columns do
-				if count > #input then
-					break
-				end
-				gui.drawText(x * frameWidth, y * frameHeight, input[count], 0xFF000000, 11)
-				count = count + 1
+		if input == nil then
+			if previousInput == nil then
+				-- No inputs yet
+				return
 			end
+			input = previousInput
 		end
+		module.displayInput(input)
+		previousInput = input
 	end
 end
 

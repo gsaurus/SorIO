@@ -15,6 +15,7 @@
 	Public functions:
 		neat.run
 		neat.replayBestRun
+		neat.getCurrentGenome
 ]]
 
 local module = {}
@@ -65,6 +66,7 @@ user.MaxNodes = 1000000
 
 -- Our network pool
 local pool = nil
+local outputs
 
 
 
@@ -75,7 +77,7 @@ local pool = nil
 
 
 
-local function sigmoid(x)
+module.sigmoid = function(x)
 	return 2/(1+math.exp(-4.9*x))-1
 end
 
@@ -228,7 +230,7 @@ function evaluateNetwork(network, inputs)
 		end
 
 		if #neuron.incoming > 0 then
-			neuron.value = sigmoid(sum)
+			neuron.value = module.sigmoid(sum)
 		end
 	end
 
@@ -696,15 +698,19 @@ local function newGeneration()
 end
 
 
+
+module.getCurrentGenome = function()
+	local species = pool.species[pool.currentSpecies]
+	return species.genomes[pool.currentGenome]
+end
+
 local function initializeRun()
 
 	-- call initialization callback
 	user.onInitializeFunction()
 
 	-- Restart pool
-	local species = pool.species[pool.currentSpecies]
-	local genome = species.genomes[pool.currentGenome]
-	generateNetwork(genome)
+	generateNetwork(module.getCurrentGenome())
 
 end
 
@@ -722,8 +728,7 @@ local function nextGenome()
 end
 
 local function fitnessAlreadyMeasured()
-	local species = pool.species[pool.currentSpecies]
-	local genome = species.genomes[pool.currentGenome]
+	local genome = module.getCurrentGenome()
 	return genome.fitness ~= 0
 end
 
@@ -836,12 +841,13 @@ end
 
 
 local function evaluateCurrent()
-	local species = pool.species[pool.currentSpecies]
-	local genome = species.genomes[pool.currentGenome]
+	local genome = module.getCurrentGenome()
 
 	local inputs = user.produceInputFunction()
 	if inputs ~= nil then
-		local outputs = evaluateNetwork(genome.network, inputs)
+		outputs = evaluateNetwork(genome.network, inputs)
+	end
+	if outputs ~= nil then
 		user.consumeOutputFunction(outputs)
 	end
 end
@@ -866,7 +872,7 @@ module.run = function(userSetup)
 	if user.InputsCount < 0 then
 		-- Automatically set the expected number of inputs
 		-- By asking for inputs, even though we're not using them yet
-		local inputs = user.produceInputFunction()
+		local inputs = user.produceInputFunction(true)
 		user.InputsCount = #inputs
 	end
 	user.InputsCount = user.InputsCount + 1
@@ -881,8 +887,7 @@ module.run = function(userSetup)
 	-- Loop
 	while true do
 
-		local species = pool.species[pool.currentSpecies]
-		local genome = species.genomes[pool.currentGenome]
+		local genome = module.getCurrentGenome()
 
 		evaluateCurrent()
 		local fitness = user.checkFinalFitnessFunction()
@@ -909,6 +914,10 @@ module.run = function(userSetup)
 
 		emu.frameadvance()
 	end
+end
+
+module.getSettings = function()
+	return user
 end
 
 return module
