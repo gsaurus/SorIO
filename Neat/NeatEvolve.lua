@@ -34,6 +34,7 @@ user.OutputsCount = -1
 -- used when starting a new run
 user.onInitializeFunction = function() end
 -- return an array containing input values
+-- or nil, to indicate no need to process input right now
 user.produceInputFunction = function() return {1, 5, 3} end
 -- receive an array containing the output values
 user.consumeOutputFunction = function(outputs) end
@@ -839,8 +840,10 @@ local function evaluateCurrent()
 	local genome = species.genomes[pool.currentGenome]
 
 	local inputs = user.produceInputFunction()
-	local outputs = evaluateNetwork(genome.network, inputs)
-	user.consumeOutputFunction(outputs)
+	if inputs ~= nil then
+		local outputs = evaluateNetwork(genome.network, inputs)
+		user.consumeOutputFunction(outputs)
+	end
 end
 
 

@@ -25,7 +25,7 @@ local ui = require("Neat/NeatUI")
 
 local user = {}
 
-GameState = "sor2.state"
+GameState = "sor2.State"
 
 ButtonNames = {
 	"A",
@@ -42,6 +42,12 @@ user.OutputsCount = #ButtonNames
 
 local MaxEnemies = 6
 local MaxItems	 = 6
+
+local InputFrequency = 2
+
+-- Reduce resolution to simplify neuronal activity
+local PositionDivider = 8
+local InvalidValue = 999
 
 -- Fitness variables
 -- Tell if game clock is counting, so that it ignores cut-scenes
@@ -112,34 +118,54 @@ local function readByte(address)
 end
 
 
-local function readCharacter(base, inputs, index)
-	local isActive = read(base)
-	if isActive then
-		inputs[index] = read(base + 0x0C)		-- Character type
-		inputs[index + 1] = read(base + 0x20)	-- X
-		inputs[index + 2] = read(base + 0x24)	-- Y
-		inputs[index + 3] = read(base + 0x10)	-- Animation
-		inputs[index + 4] = read(base + 0x38)	-- Weapon
-		inputs[index + 5] = read(base + 0x62)	-- Attack Range
-		inputs[index + 6] = read(base + 0x80)	-- Health
-		inputs[index + 7] = read(base + 0x82)	-- Lives
-	else
-		for i = 0, 7 do
-			inputs[index + i] = 0
-		end
-	end
-	return index + 8
+local function readDeltaPos(base, playerX, playerY)
+	local dx = read(base + 0x20)
+	local dy = read(base + 0x24)
+	dx = math.floor(dx / PositionDivider) - playerX
+	dy = math.floor(dy / PositionDivider) - playerY
+	return dx, dy
 end
 
-local function readItem(base, inputs, index)
-	local isActive = read(base)
+
+local function readEnemy(base, inputs, index, playerX, playerY)
+	local isActive = read(base) ~= 0
 	if isActive then
-		inputs[index] = read(base + 0x0C)		-- Type
-		inputs[index + 1] = read(base + 0x20)	-- X
-		inputs[index + 2] = read(base + 0x24)	-- Y
+		inputs[index] = read(base + 0x0C)			-- Character type
+		inputs[index + 1], inputs[index + 2] = readDeltaPos(base, playerX, playerY)
+		inputs[index + 3] = read(base + 0x10)		-- Animation
+		inputs[index + 4] = read(base + 0x38)		-- Weapon
 	else
-		for i = 0, 2 do
-			inputs[index + i] = 0
+		inputs[index] = 0
+		for i = 1, 4 do
+			inputs[index + i] = InvalidValue
+		end
+	end
+	return index + 5
+end
+
+
+local function readPlayer(base, inputs, index)
+	local isActive = read(base) ~= 0
+	if isActive then
+		inputs[index] = read(base + 0x10)		-- Animation
+		inputs[index + 1] = read(base + 0x38)	-- Weapon
+	else
+		for i = 0, 1 do
+			inputs[index + i] = InvalidValue
+		end
+	end
+	return index + 2
+end
+
+local function readItem(base, inputs, index, playerX, playerY)
+	local isActive = read(base) ~= 0
+	if isActive then
+		inputs[index] = read(base + 0x0C) -- Type
+		inputs[index + 1], inputs[index + 2] = readDeltaPos(base, playerX, playerY)
+	else
+		inputs[index] = 0
+		for i = 1, 2 do
+			inputs[index + i] = InvalidValue
 		end
 	end
 	return index + 3
@@ -149,25 +175,30 @@ end
 
 -- return an array containing input values
 user.produceInputFunction = function()
+	-- If clock is not counting, no need for input
+	local clock = read(0xFC3C)
+	if clock == previousClock or clock % InputFrequency ~= 0 then
+		return nil
+	end
+
 	local result = {}
 	-- player
-	local index = readCharacter(0xEF00, result, 1)
+	local index = readPlayer(0xEF00, result, 1)
+	local playerX, playerY = readDeltaPos(0xEF00, 0, 0)
 	-- Enemies
 	for i = 0, MaxEnemies - 1 do
-		index = readCharacter(0xF100 + i * 0x100, result, index)
+		index = readEnemy(0xF100 + i * 0x100, result, index, playerX, playerY)
 	end
 	-- Items (containers, goodies)
 	for i = 0, MaxItems - 1 do
-		index = readItem(0xF700 + i * 0x80, result, index)
+		index = readItem(0xF700 + i * 0x80, result, index, playerX, playerY)
 	end
 	-- Camera
-	result[index] = read(0xFC22)		-- X
-	result[index + 1] = read(0xFC26)	-- Y
-	index = index + 2
-
-	-- Level and scene ID in the level
-	result[index] = readByte(0xFC42)	-- Level
-	result[index + 1] = read(0xFC44)	-- Scene
+	local realPlayerX = read(0xEF20)
+	local cameraX = read(0xFC22)
+	result[index] = math.floor((realPlayerX + cameraX) / 103) - 1
+	local cameraY = read(0xFC26)
+	result[index + 1] = (cameraY > 0 and cameraY < 255) and 1 or 0
 	index = index + 2
 
 	ui.updateInput(result)
@@ -207,7 +238,7 @@ end
 
 local function checkEndCondition()
 	-- End if game-over (lives < 0 or no longer in game mode)
-	if read(0xEF82) < 0 or readByte(0xFC03) ~= 0x14 then -- HERE IS THE TRUTH
+	if read(0xEF82) < 0 or readByte(0xFC03) ~= 0x14 then
 		print("Game Over: lives " .. read(0xEF82) .. " and state is " .. readByte(0xFC03))
 		return true
 	end
