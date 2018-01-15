@@ -28,7 +28,7 @@ local user = {}
 GameState = "sor2.State"
 
 ButtonNames = {
-	"A",
+	"Z",
 	"B",
 	"C",
 	"Up",
@@ -43,7 +43,8 @@ CellType = {
 	Enemy = 2,
 	AttackingEnemy = 3,
 	FlyingEnemy = 4,
-	Count = 4
+	Container = 5,
+	Count = 5
 }
 
 -- how many output values
@@ -95,6 +96,8 @@ local EnemyHealthBonusMultiplier = -1
 local EnemyLifeBonusMultiplier = -100
 local EnemiesCountMultiplier = 990
 
+local clockToggle
+
 
 ----------------------------------
 -- Neural Network Configuration --
@@ -121,6 +124,7 @@ user.onInitializeFunction = function()
 	noAttackTimer = 0
 	previousScore = 0
 	gameplayTime = 0
+	clockToggle = false
 	clearJoypad()
 end
 
@@ -205,8 +209,8 @@ local function readItemState(base, playerX, playerY)
 	local state = CellType.Empty
 	local type = read(base + 0x0C) -- Type
 	if type >= 0x4C and type <= 0x8A then
-		-- It's a container, consider it an enemy to simplify
-		state = CellType.Enemy
+		-- It's a container
+		state = CellType.Container
 	elseif type >= 0x8C and type <= 0x94 then
 		-- Goodie!
 		state = CellType.Goodie
@@ -244,7 +248,11 @@ user.produceInputFunction = function(forceProduce)
 	-- enemies
 	for i = 0, MaxEnemies - 1 do
 		state, x, y = readEnemyState(0xF100 + i * 0x100, playerX, playerY)
-		if state ~= 0 and x >= -MatrixRangeX and x <= MatrixRangeX and y >= -MatrixRangeY and y <= MatrixRangeY then
+		if state ~= 0 then
+			if x < -MatrixRangeX then x = -MatrixRangeX end
+			if x > MatrixRangeX then x = MatrixRangeX end
+			if y < -MatrixRangeY then y = -MatrixRangeY end
+			if y > MatrixRangeY then y = MatrixRangeY end
 			local current = result[coordinatesToIndex(x, y)]
 			if state > current then
 				result[coordinatesToIndex(x, y)] = state
@@ -269,8 +277,16 @@ user.produceInputFunction = function(forceProduce)
 	local realPlayerX = read(0xEF20)
 	local cameraX = read(0xFC22)
 	local cameraY = read(0xFC26)
-	result[maxIndex + 2] = math.floor((realPlayerX + cameraX) / 103) - 1
-	result[maxIndex + 3] = (cameraY > 0 and cameraY < 255) and 1 or 0
+	cameraX = math.floor((realPlayerX + cameraX) / 103) - 1
+	if cameraX <= 0 then cameraX = 1 elseif cameraX == 1 then cameraX = 0 end
+	result[maxIndex + 2] = cameraX
+	result[maxIndex + 3] = (cameraY > 0 and cameraY < 255) and 2 or 1
+
+	-- Force camera Y to be used as a clock also
+	if clockToggle then
+		result[maxIndex + 3] = 0
+	end
+	clockToggle = not clockToggle
 
 	ui.updateInput(result)
 	return result
@@ -280,7 +296,12 @@ end
 -- receive an array containing the output values
 user.consumeOutputFunction = function(outputs)
 	controls = {}
-	for i = 1, user.OutputsCount do
+	local firstButton = 1
+	-- local clock = read(0xFC3C)
+	-- if clock == previousClock or clock % InputFrequency ~= 0 then
+	-- 	firstButton = 4
+	-- end
+	for i = firstButton, user.OutputsCount do
 		local button = "P1 " .. ButtonNames[i]
 		controls[button] = outputs[i] > 0
 	end
@@ -386,7 +407,7 @@ user.checkFinalFitnessFunction = function()
 		-- KO counter
 		fitness = fitness + read(0xEF4C) * EnemiesCountMultiplier
 
-		ui.updateFitness(fitness)
+		ui.updateFitness(fitness, runEnded)
 	end
 	updateVariables()
 	-- return fitness; only ckecking runEnded because we may be showing realtime fitness
@@ -395,7 +416,7 @@ end
 
 
 -- Redefine UI display method
-ui.displayInput = function(inputs)
+function showMap(inputs)
 	local genome = neat.getCurrentGenome()
 	local network = genome.network
 	local cells = {}
@@ -534,8 +555,14 @@ ui.displayInput = function(inputs)
 end
 
 
+function onExit()
+	neat.onExit()
+	ui.onExit()
+end
+event.onexit(onExit)
+
 ----------------------------------
 --          Launch NEAT         --
 ----------------------------------
-ui.initForm(neat)
+ui.initForm(neat, "Show Map", showMap)
 neat.run(user)

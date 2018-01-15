@@ -27,13 +27,19 @@ local bestFitness = 0
 
 local form
 local maxFitnessLabel
-local showInputCheckbox
 local showRealtimeFitnessCheckbox
+local showInputCheckbox
+local showCustomCheckbox
 local previousInput
+local showCustomFunction
 
 
-module.updateFitness = function(fitness)
-	if fitness > bestFitness then
+module.isShowCustomEnabled = function()
+	return forms.ischecked(showCustomCheckbox)
+end
+
+module.updateFitness = function(fitness, runEnded)
+	if runEnded and fitness > bestFitness then
 		bestFitness = fitness
 		forms.settext(maxFitnessLabel, "Max Fitness: " .. math.floor(bestFitness))
 	end
@@ -48,7 +54,7 @@ end
 
 
 
-module.displayInput = function(input)
+local function displayInput(input)
 	local backgroundColor = 0xE0FFFFFF
 	local screenWidth = client.bufferwidth()
 	local screenHeight = client.bufferheight()
@@ -58,7 +64,6 @@ module.displayInput = function(input)
 	local columns = math.ceil(1.0 * #input / rows);
 	local frameWidth = screenWidth / (columns + 1);
 	local frameHeight = math.min(screenHeight / (rows + 1), frameWidth * 9 / 16);
-
 	local count = 1
 	for y = 0, rows do
 		for x = 0, columns do
@@ -73,16 +78,24 @@ end
 
 
 module.updateInput = function(input)
-	if forms.ischecked(showInputCheckbox) then
-		if input == nil then
-			if previousInput == nil then
-				-- No inputs yet
-				return
-			end
-			input = previousInput
+
+	if input == nil then
+		if previousInput == nil then
+			-- No inputs yet
+			return
 		end
-		module.displayInput(input)
-		previousInput = input
+		input = previousInput
+	else
+		previousInput = {}
+		for k, v in ipairs(input) do
+			previousInput[k] = v
+		end
+	end
+	if forms.ischecked(showInputCheckbox) then
+		displayInput(input)
+	end
+	if forms.ischecked(showCustomCheckbox) then
+		showCustomFunction(input)
 	end
 end
 
@@ -93,7 +106,7 @@ local function replayBestRun(neat)
 end
 
 
-module.initForm = function(neat)
+module.initForm = function(neat, showCustomText, customFunction)
 	-- Control Panel
 	form = forms.newform(200, 150, "Fitness")
 	maxFitnessLabel = forms.label(form, "Max Fitness: 0", 5, 5)
@@ -104,18 +117,19 @@ module.initForm = function(neat)
 	)
 	showRealtimeFitnessCheckbox = forms.checkbox(form, "Show Fitness", 5, 50)
 	showInputCheckbox = forms.checkbox(form, "Show Input", 5, 75)
+	showCustomCheckbox = forms.checkbox(form, showCustomText, 5, 100)
+	showCustomFunction = customFunction
 end
 
 module.isRealTimeFitnessEnabled = function()
 	return forms.ischecked(showRealtimeFitnessCheckbox)
 end
 
-local function onExit()
+module.onExit = function()
 	if form ~= nil then
 		forms.destroy(form)
 	end
 end
-event.onexit(onExit)
 
 
 return module

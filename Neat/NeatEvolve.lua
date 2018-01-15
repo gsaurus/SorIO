@@ -694,7 +694,6 @@ local function newGeneration()
 
 	pool.generation = pool.generation + 1
 
-	saveFile(user.SaveLoadFile)
 end
 
 
@@ -734,6 +733,16 @@ end
 
 
 saveFile = function(filename)
+	-- First backup file
+	local infile = io.open(filename, "r")
+	if infile ~= nil then
+		local instr = infile:read("*a")
+		infile:close()
+		local outfile = io.open("backup.pool", "w")
+		outfile:write(instr)
+		outfile:close()
+	end
+
     local file = io.open(filename, "w")
 	file:write(pool.generation .. "\n")
 	file:write(pool.maxFitness .. "\n")
@@ -900,6 +909,7 @@ module.run = function(userSetup)
 				saveFile(user.SaveLoadFile)
 			end
 
+			saveFile(user.SaveLoadFile)
 			console.writeline("Gen " .. pool.generation .. " species " .. pool.currentSpecies .. " genome " .. pool.currentGenome .. " fitness: " .. fitness)
 
 			-- Setup next genome
@@ -919,5 +929,11 @@ end
 module.getSettings = function()
 	return user
 end
+
+
+module.onExit = function()
+	saveFile(user.SaveLoadFile)
+end
+
 
 return module
