@@ -81,7 +81,7 @@ local iddleTimer
 local NoEnemiesMaxTime = 600
 local noEnemiesTimer
 -- if there are enemies, must attack them
-local NoAttackMaxTime = 1200
+local NoAttackMaxTime = 1800
 local noAttackTimer
 local previousScore -- use score to detect it
 -- Global time penalty
