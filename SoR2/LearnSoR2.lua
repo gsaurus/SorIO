@@ -16,6 +16,9 @@
 
 ]]
 
+
+local ai_input = true
+
 ----------------------------------
 --      Game Specific Data      --
 ----------------------------------
@@ -28,7 +31,6 @@ local user = {}
 GameState = "sor2.State"
 
 ButtonNames = {
-	"Z",
 	"B",
 	"C",
 	"Up",
@@ -53,20 +55,12 @@ user.OutputsCount = #ButtonNames
 local MaxEnemies = 6
 local MaxItems	 = 6
 
-local InputFrequency = 2
+local InputFrequency = 1
 
 -- Reduce resolution to simplify neuronal activity
 local PositionDivider = 16
 -- How much character sees ahead
-local MatrixRangeX = 5
-local MatrixRangeY = 3
--- XXXXXHXXXXX
--- XXXXXHXOXXX
--- XXXXXHXXXXX
--- HHHHHHHHHHH
--- XXXXXHXXXXX
--- XXXXXHXXXXX
--- XXXXXHXXXXX
+local MatrixRangeX = 6
 
 -- Fitness variables
 -- Tell if game clock is counting, so that it ignores cut-scenes
@@ -75,28 +69,35 @@ local previousClock
 local previousPlayerX
 local previousPlayerY
 -- if there are no enemies, must move
-local MaxIdleTime = 120
+local MaxIdleTime = 60 -- 120
 local iddleTimer
 -- if there are no enemies, must look for them
-local NoEnemiesMaxTime = 600
+local NoEnemiesMaxTime = 600 --600
 local noEnemiesTimer
 -- if there are enemies, must attack them
-local NoAttackMaxTime = 1800
+local NoAttackMaxTime = 1200 -- 1800
 local noAttackTimer
 local previousScore -- use score to detect it
 -- Global time penalty
-local TimePenaltyPerFrame = -0.033
+local TimePenaltyPerFrame = -0.05
 local gameplayTime
 -- Health and lifes bonus
-local HealthBonusMultiplier = 10
-local LifeBonusMultiplier = 1000
-local ScoreMultiplier = 10
+local HealthBonusMultiplier = 20
+local LifeBonusMultiplier = 2000
+local ScoreMultiplier = 13
 -- Enemy health and lifes bonus
-local EnemyHealthBonusMultiplier = -1
-local EnemyLifeBonusMultiplier = -100
+local EnemyHealthBonusMultiplier = -10
+local EnemyLifeBonusMultiplier = -1000
 local EnemiesCountMultiplier = 990
 
 local clockToggle
+
+
+local minDeltaY = 9
+local minDeltaXForContainer = 32
+
+-- Training mode
+local EnemiesToKill = 99999999 --7 -- 22 -- 1 enemy -- 31 -- 10 enemies
 
 
 ----------------------------------
@@ -105,6 +106,7 @@ local clockToggle
 
 
 local function clearJoypad()
+	if not ai_input then return end
 	controller = {}
 	for b = 1,#ButtonNames do
 		controller["P1 " .. ButtonNames[b]] = false
@@ -140,11 +142,9 @@ local function readByte(address)
 end
 
 
-local function readDeltaPos(base, playerX, playerY)
+local function readDeltaPos(base)
 	local dx = read(base + 0x20)
 	local dy = read(base + 0x24)
-	dx = math.floor(dx / PositionDivider) - playerX
-	dy = math.floor(dy / PositionDivider) - playerY
 	return dx, dy
 end
 
@@ -159,15 +159,10 @@ local function readEnemyState(base, playerX, playerY)
 	if state == 0 then
 		return CellType.Empty
 	end
-	local dx, dy = readDeltaPos(base, playerX, playerY)
+	local dx, dy = readDeltaPos(base)
 	local isAttacking = read(base + 0x10) >= 0x30 -- Is using an agressive animation
 	local inTheAir = read(base + 0x5E) < 0
-	local isInvincible = isInvincible(base)
 	-- local isGrabbed = bit.check(state, 3)
-	if not isAttacking and isInvincible then
-		-- Not attacking and invincible? then don't care
-		return CellType.Empty
-	end
 	state = CellType.Enemy
 	if inTheAir then
 		state = CellType.FlyingEnemy
@@ -181,20 +176,23 @@ end
 local function readPlayerState(base)
 	local state = read(base)
 	if state == 0 or isInvincible(base) then
-		return 0
+		return -1
 	end
 	local hasWeapon = read(base + 0x38) ~= 0 -- Weapon
 	local animation = read(base + 0x10)
 	if animation == 36 then
 		-- being thrown
 		return 4
-	elseif animation == 0x8 or animation == 0xA then
+	elseif animation == 0x8 then
 		-- grabbing someone
 		return 3
-	elseif hasWeapon then
+	elseif animation == 0xA then
+		-- grabbing someone
 		return 2
-	else
+	elseif hasWeapon then
 		return 1
+	else
+		return 0
 	end
 end
 
@@ -204,7 +202,7 @@ local function readItemState(base, playerX, playerY)
 		return CellType.Empty
 	end
 
-	local dx, dy = readDeltaPos(base, playerX, playerY)
+	local dx, dy = readDeltaPos(base)
 	if dx == nil then return 0 end
 	local state = CellType.Empty
 	local type = read(base + 0x0C) -- Type
@@ -219,12 +217,12 @@ local function readItemState(base, playerX, playerY)
 end
 
 
-local function coordinatesToIndex(x, y)
-	local row = y + MatrixRangeY
-	local column = x + MatrixRangeX + 1
-	local width = 2 * MatrixRangeX + 1
-	return row * width + column
+local function coordinatesToIndex(x)
+	return x + MatrixRangeX + 1
 end
+
+
+local closestItemDistance = 0
 
 
 -- return an array containing input values
@@ -235,57 +233,142 @@ user.produceInputFunction = function(forceProduce)
 		ui.updateInput()
 		return nil
 	end
-	local playerX, playerY = readDeltaPos(0xEF00, 0, 0)
+	local playerX, playerY = readDeltaPos(0xEF00)
 	local state, x, y
 	local result = {}
 	-- initialize space matrix
-	local matrixWidth = 2 * MatrixRangeX + 1
-	local matrixHeight = 2 * MatrixRangeY + 1
-	local maxIndex = matrixWidth * matrixHeight
+	local maxIndex = 2 * MatrixRangeX + 1
 	for i = 1, maxIndex do
 		result[i] = 0
 	end
+
+	local realPlayerX = read(0xEF20)
+	local cameraX = read(0xFC22)
+	local cameraY = read(0xFC26)
+
+	local closestType = 0
+	local closestX = 0
+	local closestY = 0
+	local closestDistance = 999999
+	local distance
+
 	-- enemies
 	for i = 0, MaxEnemies - 1 do
-		state, x, y = readEnemyState(0xF100 + i * 0x100, playerX, playerY)
+		state, x, y = readEnemyState(0xF100 + i * 0x100)
+		-- if i ~= 4 then
+		-- 	mainmemory.write_s16_be(0xF100 + i * 0x100, 0)
+		-- end
 		if state ~= 0 then
-			if x < -MatrixRangeX then x = -MatrixRangeX end
-			if x > MatrixRangeX then x = MatrixRangeX end
-			if y < -MatrixRangeY then y = -MatrixRangeY end
-			if y > MatrixRangeY then y = MatrixRangeY end
-			local current = result[coordinatesToIndex(x, y)]
-			if state > current then
-				result[coordinatesToIndex(x, y)] = state
+			local ex = x + cameraX
+			x = x - playerX
+			y = y - playerY
+			if ex > 0 and ex < 320 then
+				distance = math.sqrt(x * x + y * y * 15)
+				-- print("closest (enemy): X " .. x .. ", y " .. y .. ", distance " .. distance)
+				if distance < closestDistance then
+					closestX = x
+					closestY = y
+					closestDistance = distance
+					closestType = state
+				end
+			end
+			if math.abs(y) <= minDeltaY then
+				x = math.floor(x / PositionDivider + 0.5)
+				if x >= -MatrixRangeX and x <= MatrixRangeX then
+					local current = result[coordinatesToIndex(x)]
+					if state > current then
+						result[coordinatesToIndex(x)] = state
+					end
+				end
 			end
 		end
 	end
 	-- items
 	for i = 0, MaxItems - 1 do
-		state, x, y = readItemState(0xF700 + i * 0x80, playerX, playerY)
-		if state ~= 0 and x >= -MatrixRangeX and x <= MatrixRangeX and y >= -MatrixRangeY and y <= MatrixRangeY then
-			local current = result[coordinatesToIndex(x, y)]
-			if state > current then
-				result[coordinatesToIndex(x, y)] = state
+		state, x, y = readItemState(0xF700 + i * 0x80)
+		if state ~= 0 then
+			local ex = x + cameraX
+			x = x - playerX
+			y = y - playerY
+			if ex > 0 and ex < 320 then
+				distance = math.sqrt(x * x + y * y * 15)
+				--print("closest (item): X " .. x .. ", y " .. y .. ", distance " .. distance)
+				if distance < closestDistance then
+					closestX = x
+					closestY = y
+					closestDistance = distance
+					closestType = state
+				end
+			end
+			if math.abs(y) <= minDeltaY then
+				x = math.floor(x / PositionDivider + 0.5)
+				if x >= -MatrixRangeX and x <= MatrixRangeX then
+					local current = result[coordinatesToIndex(x)]
+					if state > current then
+						if state ~= CellType.Goodie or math.abs(x) <= 1 then
+							result[coordinatesToIndex(x)] = state
+						end
+					end
+				end
 			end
 		end
+	end
+
+	-- Used for fitness
+	if closestDistance ~= 999999 then
+		closestItemDistance = closestDistance
+	else
+		closestItemDistance = 0
 	end
 
 	-- additional information
 	-- player state
 	result[maxIndex + 1] = readPlayerState(0xEF00)
-	-- Camera
-	local realPlayerX = read(0xEF20)
-	local cameraX = read(0xFC22)
-	local cameraY = read(0xFC26)
-	cameraX = math.floor((realPlayerX + cameraX) / 103) - 1
-	if cameraX <= 0 then cameraX = 1 elseif cameraX == 1 then cameraX = 0 end
-	result[maxIndex + 2] = cameraX
-	result[maxIndex + 3] = (cameraY > 0 and cameraY < 255) and 2 or 1
+	-- player facing direction, so he knows how to approach surrounding enemies
+	result[maxIndex + 2] = bit.check(readByte(0xEF0F), 0) and 1 or 0
 
-	-- Force camera Y to be used as a clock also
-	if clockToggle then
-		result[maxIndex + 3] = 0
+	-- Decide where to go
+	-- Camera
+	cameraX = math.floor((realPlayerX + cameraX) / 103) - 1 -- -1, 0, 1
+
+	result[maxIndex + 3] = 0 -- right
+	result[maxIndex + 4] = 0 -- left
+	result[maxIndex + 5] = 0 -- up
+	result[maxIndex + 6] = 0 -- down
+	-- print("Final closest: type " .. closestType  .. " X " .. closestX .. ", y " .. closestY .. ", distance " .. closestDistance)
+	if closestType ~= 0 then
+		if closestY >= minDeltaY then
+			result[maxIndex + 6] = 1
+		elseif closestY <= -minDeltaY then
+			result[maxIndex + 5] = 1
+		end
+		local done = false
+		-- check if stuck on box
+		if closestType == CellType.Container then
+			-- print("container X: " .. closestX)
+			if closestX >= -minDeltaXForContainer and closestX <= minDeltaXForContainer and (closestY < -minDeltaY or closestY > minDeltaY) then
+				result[maxIndex + 4] = 1
+				done = true
+			end
+		end
+		if not done then
+			if closestX > 4 then
+				result[maxIndex + 3] = 1
+			elseif closestX < 4 then
+				result[maxIndex + 4] = 1
+			end
+		end
+	else
+		if cameraX < 1 then
+			result[maxIndex + 3] = 1
+		end
+		if cameraY > 0 and cameraY < 255 then
+			result[maxIndex + 6] = 1
+		end
 	end
+
+	-- One extra input for clock toggle...
+	result[maxIndex + 7] = clockToggle and 1 or 0
 	clockToggle = not clockToggle
 
 	ui.updateInput(result)
@@ -295,6 +378,7 @@ end
 
 -- receive an array containing the output values
 user.consumeOutputFunction = function(outputs)
+	if not ai_input then return end
 	controls = {}
 	local firstButton = 1
 	-- local clock = read(0xFC3C)
@@ -334,6 +418,23 @@ local function checkEndCondition()
 		print("Game Over: lives " .. read(0xEF82) .. " and state is " .. readByte(0xFC03))
 		return true
 	end
+	-- First checkpoint: must pick life
+	if read(0xFC22) < -30 and read(0xFC22) > -40 and read(0xF700) ~= 0 then
+		print("Didn't pick life.")
+		return true
+	end
+	if read(0xFC22) < -320 and read(0xFC22) > -360 and read(0xF780) ~= 0 then
+		print("Didn't pick cash bag.")
+		return true
+	end
+	if read(0xEF4C) == 7 and (read(0xEF82) < 3 or read(0xEF96) < 40) then
+		print("Scored " .. read(0xEF96) .. ". Must do better than that")
+		return true
+	end
+	if read(0xEF4C) >= EnemiesToKill then
+		print("All enemies killed")
+		return true
+	end
 	-- Only end if clock is counting
 	local clock = read(0xFC3C)
 	if clock == previousClock then
@@ -367,6 +468,7 @@ local function checkEndCondition()
 		end
 		-- if there are no enemies, must look for them
 		if noEnemiesTimer > NoEnemiesMaxTime then
+			print("No enemies timeout")
 			return true
 		end
 		noEnemiesTimer = noEnemiesTimer + 1
@@ -401,11 +503,16 @@ user.checkFinalFitnessFunction = function()
 		fitness = fitness + read(0xEF82) * LifeBonusMultiplier
 		-- Enemy health and lifes bonus
 		for i = 0, MaxEnemies - 1 do
-			fitness = fitness + read(0xF180 + i * 0x100) * EnemyHealthBonusMultiplier
-			fitness = fitness + read(0xF182 + i * 0x100) * EnemyLifeBonusMultiplier
+			if read(0xF100 + i * 0x100) ~= 0 then
+				fitness = fitness + read(0xF180 + i * 0x100) * EnemyHealthBonusMultiplier
+				fitness = fitness + read(0xF182 + i * 0x100) * EnemyLifeBonusMultiplier
+			end
 		end
 		-- KO counter
 		fitness = fitness + read(0xEF4C) * EnemiesCountMultiplier
+
+		-- If nothing else, at least get close to something
+		fitness = fitness - closestItemDistance
 
 		ui.updateFitness(fitness, runEnded)
 	end
@@ -426,22 +533,19 @@ function showMap(inputs)
 	cell.x = 50
 	cell.y = 70
 	local matrixWidth = 2 * MatrixRangeX + 1
-	local matrixHeight = 2 * MatrixRangeY + 1
-	local maxIndex = matrixWidth * matrixHeight
+	local maxIndex = matrixWidth
 	cell.value = network.neurons[maxIndex + 1].value
 	cell.color = cell.value * 0x55000000 + 0x00FF00FF
 	cells[-999999999] = cell
 	local i = 1
 	-- Enemies and items
-	for dy=-MatrixRangeY,MatrixRangeY do
-		for dx=-MatrixRangeX,MatrixRangeX do
-			cell = {}
-			cell.x = 50+5*dx
-			cell.y = 70+5*dy
-			cell.value = network.neurons[i].value
-			cells[i] = cell
-			i = i + 1
-		end
+	for dx=-MatrixRangeX,MatrixRangeX do
+		cell = {}
+		cell.x = 50+5*dx
+		cell.y = 70
+		cell.value = network.neurons[i].value
+		cells[i] = cell
+		i = i + 1
 	end
 	local biasCell = {}
 	biasCell.x = 80
@@ -513,7 +617,7 @@ function showMap(inputs)
 		end
 	end
 
-	gui.drawBox(50-MatrixRangeX*5-3,70-MatrixRangeY*5-3,50+MatrixRangeX*5+2,70+MatrixRangeY*5+2,0xFF000000, 0x80808080)
+	gui.drawBox(50-MatrixRangeX*5-3,70-3,50+MatrixRangeX*5+2,70+2,0xFF000000, 0x80808080)
 	for n,cell in pairs(cells) do
 		if n > #inputs or cell.value ~= 0 then
 			local color = cell.color
