@@ -33,10 +33,8 @@ GameState = "sor2.State"
 ButtonNames = {
 	"B",
 	"C",
-	"Up",
-	"Down",
-	"Left",
-	"Right",
+	"Vertical",
+	"Horizontal",
 }
 
 CellType = {
@@ -107,10 +105,18 @@ local EnemiesToKill = 99999999 --7 -- 22 -- 1 enemy -- 31 -- 10 enemies
 
 local function clearJoypad()
 	if not ai_input then return end
-	controller = {}
-	for b = 1,#ButtonNames do
-		controller["P1 " .. ButtonNames[b]] = false
-	end
+	controller = {
+		["P1 A"] = false,
+		["P1 B"] = false,
+		["P1 C"] = false,
+		["P1 X"] = false,
+		["P1 Y"] = false,
+		["P1 Z"] = false,
+		["P1 Up"] = false,
+		["P1 Down"] = false,
+		["P1 Left"] = false,
+		["P1 Right"] = false,
+	}
 	joypad.set(controller)
 end
 
@@ -331,23 +337,21 @@ user.produceInputFunction = function(forceProduce)
 	-- Camera
 	cameraX = math.floor((realPlayerX + cameraX) / 103) - 1 -- -1, 0, 1
 
-	result[maxIndex + 3] = 0 -- right
-	result[maxIndex + 4] = 0 -- left
-	result[maxIndex + 5] = 0 -- up
-	result[maxIndex + 6] = 0 -- down
+	result[maxIndex + 3] = 0 -- horizontal
+	result[maxIndex + 4] = 0 -- vertical
 	-- print("Final closest: type " .. closestType  .. " X " .. closestX .. ", y " .. closestY .. ", distance " .. closestDistance)
 	if closestType ~= 0 then
 		if closestY >= minDeltaY then
-			result[maxIndex + 6] = 1
+			result[maxIndex + 4] = -1
 		elseif closestY <= -minDeltaY then
-			result[maxIndex + 5] = 1
+			result[maxIndex + 4] = 1
 		end
 		local done = false
 		-- check if stuck on box
 		if closestType == CellType.Container then
 			-- print("container X: " .. closestX)
 			if closestX >= -minDeltaXForContainer and closestX <= minDeltaXForContainer and (closestY < -minDeltaY or closestY > minDeltaY) then
-				result[maxIndex + 4] = 1
+				result[maxIndex + 3] = -1
 				done = true
 			end
 		end
@@ -355,7 +359,7 @@ user.produceInputFunction = function(forceProduce)
 			if closestX > 4 then
 				result[maxIndex + 3] = 1
 			elseif closestX < 4 then
-				result[maxIndex + 4] = 1
+				result[maxIndex + 3] = -1
 			end
 		end
 	else
@@ -363,12 +367,12 @@ user.produceInputFunction = function(forceProduce)
 			result[maxIndex + 3] = 1
 		end
 		if cameraY > 0 and cameraY < 255 then
-			result[maxIndex + 6] = 1
+			result[maxIndex + 4] = -1
 		end
 	end
 
 	-- One extra input for clock toggle...
-	result[maxIndex + 7] = clockToggle and 1 or 0
+	result[maxIndex + 5] = clockToggle and 1 or 0
 	clockToggle = not clockToggle
 
 	ui.updateInput(result)
@@ -381,13 +385,23 @@ user.consumeOutputFunction = function(outputs)
 	if not ai_input then return end
 	controls = {}
 	local firstButton = 1
-	-- local clock = read(0xFC3C)
-	-- if clock == previousClock or clock % InputFrequency ~= 0 then
-	-- 	firstButton = 4
-	-- end
-	for i = firstButton, user.OutputsCount do
-		local button = "P1 " .. ButtonNames[i]
-		controls[button] = outputs[i] > 0
+	for i = 1, user.OutputsCount do
+		if ButtonNames[i] == "Horizontal" then
+			if outputs[i] > 0 then
+				controls["P1 Right"] = true
+			elseif outputs[i] < 0 then
+				controls["P1 Left"] = true
+			end
+		elseif ButtonNames[i] == "Vertical" then
+			if outputs[i] > 0 then
+				controls["P1 Up"] = true
+			elseif outputs[i] < 0 then
+				controls["P1 Down"] = true
+			end
+		else
+			local button = "P1 " .. ButtonNames[i]
+			controls[button] = outputs[i] ~= 0
+		end
 	end
 	joypad.set(controls)
 end
@@ -524,6 +538,11 @@ end
 
 -- Redefine UI display method
 function showMap(inputs)
+	local backgroundColor = 0xE0FFFFFF
+	local screenWidth = client.bufferwidth()
+	local screenHeight = client.bufferheight()
+	gui.drawBox(0, 0, screenWidth, screenHeight * 0.5, backgroundColor, backgroundColor)
+
 	local genome = neat.getCurrentGenome()
 	local network = genome.network
 	local cells = {}
@@ -562,9 +581,11 @@ function showMap(inputs)
 		cells[MaxNodes+o] = cell
 		local color
 		if cell.value > 0 then
-			color = 0xFF0000FF
+			color = 0xFF008800
+		elseif o > 2 and cell.value < 0 then
+			color = 0xFF880000
 		else
-			color = 0xFFFFFFFF
+			color = 0xFF0000FF
 		end
 		gui.drawText(223, 24+8*o, ButtonNames[o], color, 9)
 	end
@@ -642,9 +663,9 @@ function showMap(inputs)
 			local c1 = cells[gene.into]
 			local c2 = cells[gene.out]
 			if c1 == nil or c2 == nil then break end
-			local opacity = 0xA0000000
+			local opacity = 0xF0000000
 			if c1.value == 0 then
-				opacity = 0x20000000
+				opacity = 0x60000000
 			end
 
 			local color = 0x80-math.floor(math.abs(neat.sigmoid(gene.weight))*0x80)

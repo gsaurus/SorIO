@@ -58,12 +58,13 @@ local function displayInput(input)
 	local backgroundColor = 0xE0FFFFFF
 	local screenWidth = client.bufferwidth()
 	local screenHeight = client.bufferheight()
-	gui.drawBox(0, 0, screenWidth, screenHeight, backgroundColor, backgroundColor)
 
 	local rows = math.floor(math.sqrt(#input));
 	local columns = math.ceil(1.0 * #input / rows);
 	local frameWidth = screenWidth / (columns + 1);
 	local frameHeight = math.min(screenHeight / (rows + 1), frameWidth * 9 / 16);
+	screenHeight = math.min(screenHeight, frameHeight * (rows - 1))
+	gui.drawBox(0, 0, screenWidth, screenHeight, backgroundColor, backgroundColor)
 	local count = 1
 	for y = 0, rows do
 		for x = 0, columns do
