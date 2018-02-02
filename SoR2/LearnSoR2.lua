@@ -30,25 +30,17 @@ local user = {}
 
 GameState = "sor2.State"
 
-ButtonNames = {
-	"B",
-	"C",
-	"Vertical",
-	"Horizontal",
-}
-
 CellType = {
-	Empty = 0,
 	Goodie = 1,
-	Enemy = 2,
-	AttackingEnemy = 3,
-	FlyingEnemy = 4,
-	Container = 5,
-	Count = 5
+	Container = 0.5,
+	Empty = 0,
+	Enemy = -0.3,
+	AttackingEnemy = -0.6,
+	FlyingEnemy = -0.9,
 }
 
 -- how many output values
-user.OutputsCount = #ButtonNames
+user.OutputsCount = 3
 
 local MaxEnemies = 6
 local MaxItems	 = 6
@@ -92,7 +84,7 @@ local clockToggle
 
 
 local minDeltaY = 9
-local minDeltaXForContainer = 32
+local minDeltaXForContainer = 34
 
 -- Training mode
 local EnemiesToKill = 99999999 --7 -- 22 -- 1 enemy -- 31 -- 10 enemies
@@ -186,17 +178,17 @@ local function readPlayerState(base)
 	end
 	local hasWeapon = read(base + 0x38) ~= 0 -- Weapon
 	local animation = read(base + 0x10)
-	if animation == 36 then
-		-- being thrown
-		return 4
-	elseif animation == 0x8 then
+	if animation == 0x8 then
 		-- grabbing someone
-		return 3
+		return 0.5
 	elseif animation == 0xA then
 		-- grabbing someone
-		return 2
-	elseif hasWeapon then
 		return 1
+	elseif hasWeapon then
+		return -0.5
+	elseif animation == 36 then
+		-- being thrown
+		return -1
 	else
 		return 0
 	end
@@ -282,7 +274,7 @@ user.produceInputFunction = function(forceProduce)
 				x = math.floor(x / PositionDivider + 0.5)
 				if x >= -MatrixRangeX and x <= MatrixRangeX then
 					local current = result[coordinatesToIndex(x)]
-					if state > current then
+					if state < current then
 						result[coordinatesToIndex(x)] = state
 					end
 				end
@@ -310,7 +302,7 @@ user.produceInputFunction = function(forceProduce)
 				x = math.floor(x / PositionDivider + 0.5)
 				if x >= -MatrixRangeX and x <= MatrixRangeX then
 					local current = result[coordinatesToIndex(x)]
-					if state > current then
+					if current == CellType.Empty or state < current then
 						if state ~= CellType.Goodie or math.abs(x) <= 1 then
 							result[coordinatesToIndex(x)] = state
 						end
@@ -384,24 +376,28 @@ end
 user.consumeOutputFunction = function(outputs)
 	if not ai_input then return end
 	controls = {}
-	local firstButton = 1
-	for i = 1, user.OutputsCount do
-		if ButtonNames[i] == "Horizontal" then
-			if outputs[i] > 0 then
-				controls["P1 Right"] = true
-			elseif outputs[i] < 0 then
-				controls["P1 Left"] = true
-			end
-		elseif ButtonNames[i] == "Vertical" then
-			if outputs[i] > 0 then
-				controls["P1 Up"] = true
-			elseif outputs[i] < 0 then
-				controls["P1 Down"] = true
-			end
-		else
-			local button = "P1 " .. ButtonNames[i]
-			controls[button] = outputs[i] ~= 0
-		end
+	-- Attack, Jump, A+B
+	if outputs[1] > 0.3 then
+		controls["P1 B"] = true
+		controls["P1 C"] = false
+	elseif outputs[1] < -0.3 then
+		controls["P1 B"] = false
+		controls["P1 C"] = true
+	elseif outputs[1] ~= 0 then -- x >= -0.3 && x <= 0.3
+		controls["P1 B"] = true
+		controls["P1 C"] = true
+	end
+	-- Left / Right
+	if outputs[2] > 0 then
+		controls["P1 Right"] = true
+	elseif outputs[2] < 0 then
+		controls["P1 Left"] = true
+	end
+	-- Up / Down
+	if outputs[3] > 0 then
+		controls["P1 Up"] = true
+	elseif outputs[3] < 0 then
+		controls["P1 Down"] = true
 	end
 	joypad.set(controls)
 end
@@ -537,62 +533,134 @@ end
 
 
 -- Redefine UI display method
+local MapX = 160
+local MapY = 106
 function showMap(inputs)
+	local inputsCount = #inputs + 1
 	local backgroundColor = 0xE0FFFFFF
 	local screenWidth = client.bufferwidth()
 	local screenHeight = client.bufferheight()
+	local text = "-"
+	local color
 	gui.drawBox(0, 0, screenWidth, screenHeight * 0.5, backgroundColor, backgroundColor)
 
 	local genome = neat.getCurrentGenome()
 	local network = genome.network
 	local cells = {}
 	local cell = {}
-	-- Player
-	cell = {}
-	cell.x = 50
-	cell.y = 70
 	local matrixWidth = 2 * MatrixRangeX + 1
 	local maxIndex = matrixWidth
+	-- Player
+	cell = {}
+	cell.x = MapX
+	cell.y = MapY
 	cell.value = network.neurons[maxIndex + 1].value
 	cell.color = cell.value * 0x55000000 + 0x00FF00FF
-	cells[-999999999] = cell
+	cells[maxIndex + 1] = cell
+	-- Player direction
+	cell = {}
+	cell.x = 88
+	cell.y = 10
+	cell.value = network.neurons[maxIndex + 2].value
+	cells[maxIndex + 2] = cell
+	text = cell.value > 0 and "Facing  ->" or "Facing <-"
+	cell.color = cell.value > 0 and 0xFF00AAFF or 0xFFAA00FF
+	gui.drawText(5, cell.y - 8, text, 0xFF000000, 9)
+	-- Horizontal
+	cell = {}
+	cell.x = 88
+	cell.y = 30
+	cell.value = network.neurons[maxIndex + 3].value
+	cells[maxIndex + 3] = cell
+	if cell.value == 0 then
+		text = "Aiming  -"
+		cell.color = 0x00000000
+	else
+		text = cell.value > 0 and "Aiming  ->" or "Aiming <-"
+		cell.color = cell.value > 0 and 0xFF00AAFF or 0xFFAA00FF
+	end
+	gui.drawText(5, cell.y - 8, text, 0xFF000000, 9)
+	-- Vertical
+	cell = {}
+	cell.x = 88
+	cell.y = 50
+	cell.value = network.neurons[maxIndex + 4].value
+	cells[maxIndex + 4] = cell
+	if cell.value == 0 then
+		text = "Aiming  -"
+		cell.color = 0x00000000
+	else
+		text = cell.value > 0 and "Aiming  ^" or "Aiming  v"
+		cell.color = cell.value > 0 and 0xFF00AAFF or 0xFFAA00FF
+	end
+	gui.drawText(5, cell.y - 8, text, 0xFF000000, 9)
+	-- Clock
+	cell = {}
+	cell.x = 88
+	cell.y = 70
+	cell.value = network.neurons[maxIndex + 5].value
+	cells[maxIndex + 5] = cell
+	cell.color = cell.value > 0 and 0xFF00AAFF or 0xFFAA00FF
+	text = "Clock" -- .. cell.value
+	gui.drawText(5, cell.y - 8, text, 0xFF000000, 9)
+
 	local i = 1
 	-- Enemies and items
 	for dx=-MatrixRangeX,MatrixRangeX do
 		cell = {}
-		cell.x = 50+5*dx
-		cell.y = 70
+		cell.x = MapX+5*dx
+		cell.y = MapY
 		cell.value = network.neurons[i].value
 		cells[i] = cell
 		i = i + 1
 	end
 	local biasCell = {}
-	biasCell.x = 80
-	biasCell.y = 110
-	biasCell.value = network.neurons[#inputs].value
-	cells[#inputs] = biasCell
+	biasCell.x = 88
+	biasCell.y = 90
+	biasCell.value = network.neurons[inputsCount].value
+	cells[inputsCount] = biasCell
+	gui.drawText(5, biasCell.y - 8, "Bias", 0xFF000000, 9)
 
 	local MaxNodes = neat.getSettings().MaxNodes
 	for o = 1, user.OutputsCount do
 		cell = {}
-		cell.x = 220
-		cell.y = 30 + 8 * o
+		cell.x = 240
+		cell.y = 8 + 24 * o
 		cell.value = network.neurons[MaxNodes + o].value
 		cells[MaxNodes+o] = cell
-		local color
-		if cell.value > 0 then
-			color = 0xFF008800
-		elseif o > 2 and cell.value < 0 then
-			color = 0xFF880000
-		else
+		text = "-"
+		if cell.value == 0 then
 			color = 0xFF0000FF
+		else
+			color = 0xFF008800
+			if o == 1 then
+				if cell.value > 0.3 then
+					text = "Attack"
+				elseif cell.value < -0.3 then
+					text = "Jump"
+				else
+					text = "Attack + Jump"
+				end
+			elseif o == 2 then
+				if cell.value > 0 then
+					text = "Right"
+				elseif cell.value < 0 then
+					text = "Left"
+				end
+			elseif o == 3 then
+				if cell.value > 0 then
+					text = "Up"
+				elseif cell.value < 0 then
+					text = "Down"
+				end
+			end
 		end
-		gui.drawText(223, 24+8*o, ButtonNames[o], color, 9)
+		gui.drawText(244, 24*o, text, color, 9)
 	end
 
 	for n,neuron in pairs(network.neurons) do
 		cell = {}
-		if n > #inputs and n <= MaxNodes then
+		if n > inputsCount and n <= MaxNodes then
 			cell.x = 140
 			cell.y = 40
 			cell.value = neuron.value
@@ -606,7 +674,7 @@ function showMap(inputs)
 				local c1 = cells[gene.into]
 				local c2 = cells[gene.out]
 				if c1 == nil or c2 == nil then break end
-				if gene.into > #inputs and gene.into <= MaxNodes then
+				if gene.into > inputsCount and gene.into <= MaxNodes then
 					c1.x = 0.75*c1.x + 0.25*c2.x
 					if c1.x >= c2.x then
 						c1.x = c1.x - 40
@@ -621,7 +689,7 @@ function showMap(inputs)
 					c1.y = 0.75*c1.y + 0.25*c2.y
 
 				end
-				if gene.out > #inputs and gene.out <= MaxNodes then
+				if gene.out > inputsCount and gene.out <= MaxNodes then
 					c2.x = 0.25*c1.x + 0.75*c2.x
 					if c1.x >= c2.x then
 						c2.x = c2.x + 40
@@ -638,24 +706,23 @@ function showMap(inputs)
 		end
 	end
 
-	gui.drawBox(50-MatrixRangeX*5-3,70-3,50+MatrixRangeX*5+2,70+2,0xFF000000, 0x80808080)
+	gui.drawBox(MapX-MatrixRangeX*5-3,MapY-3,MapX+MatrixRangeX*5+2,MapY+2,0xFF000000, 0x80808080)
 	for n,cell in pairs(cells) do
-		if n > #inputs or cell.value ~= 0 then
-			local color = cell.color
-			if color == nil then
-				local color = math.floor((cell.value / CellType.Count) * 256)
-				if color > 255 then color = 255 end
-				if color < 0 then color = 0 end
-				local opacity = 0xFF000000
-				if cell.value == 0 then
-					opacity = 0x50000000
-				end
-				color = opacity + color*0x10000 + color*0x100 + color
-				gui.drawBox(cell.x-2,cell.y-2,cell.x+2,cell.y+2,opacity,color)
-			else
-				gui.drawBox(cell.x-2,cell.y-2,cell.x+2,cell.y+2,0xFFFFFFFF, color)
+		if n > maxIndex or cell.value ~= 0 then
+			color = cell.color
+			local opacity = 0xFF000000
+			if cell.value == 0 then
+				opacity = 0x50000000
 			end
-
+			if color == nil then
+				color = 0x00000000
+				if cell.value == CellType.Goodie then color = 0xFF00FF00 end
+				if cell.value == CellType.Container then color = 0xFFAAFF00 end
+				if cell.value == CellType.Enemy then color = 0xFFAA6600 end
+				if cell.value == CellType.AttackingEnemy then color = 0xFFFF0000 end
+				if cell.value == CellType.FlyingEnemy then color = 0xFFAA0088 end
+			end
+			gui.drawBox(cell.x-2,cell.y-2,cell.x+2,cell.y+2,opacity,color)
 		end
 	end
 	for _,gene in pairs(genome.genes) do
@@ -663,16 +730,16 @@ function showMap(inputs)
 			local c1 = cells[gene.into]
 			local c2 = cells[gene.out]
 			if c1 == nil or c2 == nil then break end
-			local opacity = 0xF0000000
+			local opacity = 0xF8000000
 			if c1.value == 0 then
-				opacity = 0x60000000
+				opacity = 0x30000000
 			end
 
-			local color = 0x80-math.floor(math.abs(neat.sigmoid(gene.weight))*0x80)
+			color = 0x80-math.floor(math.abs(neat.sigmoid(gene.weight))*0x80)
 			if gene.weight > 0 then
-				color = opacity + 0x8000 + 0x10000*color
+				color = opacity + 0xA000 + 0x10000*color
 			else
-				color = opacity + 0x800000 + 0x100*color
+				color = opacity + 0xA00000 + 0x100*color
 			end
 			gui.drawLine(c1.x+1, c1.y, c2.x-3, c2.y, color)
 		end

@@ -744,6 +744,7 @@ saveFile = function(filename)
 	end
 
     local file = io.open(filename, "w")
+	if file == nil then return end
 	file:write(pool.generation .. "\n")
 	file:write(pool.maxFitness .. "\n")
 	file:write(#pool.species .. "\n")
