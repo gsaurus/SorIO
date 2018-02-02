@@ -220,6 +220,11 @@ module.initForm = function(neat, showCustomText, customFunction)
 		function() replayBestRun(neat) end,
 		5, 25
 	)
+	forms.button(
+		form, "Save",
+		neat.save,
+		100, 25
+	)
 	showRealtimeFitnessCheckbox = forms.checkbox(form, "Show Fitness", 5, 50)
 	showInputCheckbox = forms.checkbox(form, "Show Input", 5, 75)
 	showCustomCheckbox = forms.checkbox(form, showCustomText, 5, 100)

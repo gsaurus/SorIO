@@ -60,6 +60,7 @@ user.StepSize = 0.1
 user.DisableMutationChance = 0.4
 user.EnableMutationChance = 0.2
 user.MaxNodes = 1000000
+user.SaveFrequency = 20
 
 
 
@@ -67,6 +68,8 @@ user.MaxNodes = 1000000
 -- Our network pool
 local pool = nil
 local outputs
+local totalRuns = 0
+local markedToSave = false;
 
 
 
@@ -732,7 +735,14 @@ local function fitnessAlreadyMeasured()
 end
 
 
-saveFile = function(filename)
+module.save = function()
+	markedToSave = true
+end
+
+local function saveFile()
+	markedToSave = false
+	local filename = user.SaveLoadFile
+	totalRuns = 0
 	-- First backup file
 	local infile = io.open(filename, "r")
 	if infile ~= nil then
@@ -904,13 +914,13 @@ module.run = function(userSetup)
 
 		if fitness ~= nil then
 			genome.fitness = fitness
-
+			totalRuns = totalRuns + 1
 			if fitness > pool.maxFitness then
 				pool.maxFitness = fitness
-				saveFile(user.SaveLoadFile)
+				saveFile()
+			elseif totalRuns % user.SaveFrequency == 0 then
+				saveFile()
 			end
-
-			saveFile(user.SaveLoadFile)
 			console.writeline("Gen " .. pool.generation .. " species " .. pool.currentSpecies .. " genome " .. pool.currentGenome .. " fitness: " .. fitness)
 
 			-- Setup next genome
@@ -923,6 +933,10 @@ module.run = function(userSetup)
 			initializeRun()
 		end
 
+		if markedToSave then
+			saveFile()
+		end
+
 		emu.frameadvance()
 	end
 end
@@ -933,7 +947,7 @@ end
 
 
 module.onExit = function()
-	saveFile(user.SaveLoadFile)
+	saveFile()
 end
 
 

@@ -28,7 +28,8 @@ local ui = require("Neat/NeatUI")
 
 local user = {}
 
-GameState = "sor2.State"
+local GameState = "sor2.State"
+local internalGameState
 
 CellType = {
 	Goodie = 1,
@@ -115,7 +116,12 @@ end
 
 -- used when starting a new run
 user.onInitializeFunction = function()
-	savestate.load(GameState);
+	if internalGameState == nil then
+		savestate.load(GameState);
+		memoryStateName = memorysavestate.savecorestate()
+	else
+		memorysavestate.loadcorestate(memoryStateName)
+	end
 	previousClock = 9999999
 	previousPlayerX = -1
 	previousPlayerY = -1
