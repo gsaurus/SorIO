@@ -60,13 +60,13 @@ local previousClock
 local previousPlayerX
 local previousPlayerY
 -- if there are no enemies, must move
-local MaxIdleTime = 60 -- 120
+local MaxIdleTime = 360
 local iddleTimer
 -- if there are no enemies, must look for them
-local NoEnemiesMaxTime = 600 --600
+local NoEnemiesMaxTime = 1200
 local noEnemiesTimer
 -- if there are enemies, must attack them
-local NoAttackMaxTime = 1200 -- 1800
+local NoAttackMaxTime = 1800 -- 1800
 local noAttackTimer
 local previousScore -- use score to detect it
 -- Global time penalty
@@ -85,7 +85,7 @@ local clockToggle
 
 
 local minDeltaY = 9
-local minDeltaXForContainer = 34
+local minDeltaXForContainer = 42
 
 -- Training mode
 local EnemiesToKill = 99999999 --7 -- 22 -- 1 enemy -- 31 -- 10 enemies
@@ -119,6 +119,7 @@ user.onInitializeFunction = function()
 	if internalGameState == nil then
 		savestate.load(GameState);
 		memoryStateName = memorysavestate.savecorestate()
+		savestate.save(GameState);
 	else
 		memorysavestate.loadcorestate(memoryStateName)
 	end
@@ -332,9 +333,6 @@ user.produceInputFunction = function(forceProduce)
 	result[maxIndex + 2] = bit.check(readByte(0xEF0F), 0) and 1 or 0
 
 	-- Decide where to go
-	-- Camera
-	cameraX = math.floor((realPlayerX + cameraX) / 103) - 1 -- -1, 0, 1
-
 	result[maxIndex + 3] = 0 -- horizontal
 	result[maxIndex + 4] = 0 -- vertical
 	-- print("Final closest: type " .. closestType  .. " X " .. closestX .. ", y " .. closestY .. ", distance " .. closestDistance)
@@ -349,7 +347,13 @@ user.produceInputFunction = function(forceProduce)
 		if closestType == CellType.Container then
 			-- print("container X: " .. closestX)
 			if closestX >= -minDeltaXForContainer and closestX <= minDeltaXForContainer and (closestY < -minDeltaY or closestY > minDeltaY) then
-				result[maxIndex + 3] = -1
+				local obstacleX = ((realPlayerX + closestX + cameraX) / 103) - 1
+				-- print("(" .. realPlayerX .. " + " .. closestX .. " + " .. cameraX .. ") / 103) - 1 = " .. obstacleX)
+				if obstacleX >= 0 then
+					result[maxIndex + 3] = -1
+				else
+					result[maxIndex + 3] = 1
+				end
 				done = true
 			end
 		end
@@ -361,12 +365,20 @@ user.produceInputFunction = function(forceProduce)
 			end
 		end
 	else
-		if cameraX < 1 then
+		local cameraLocationX = math.floor((realPlayerX + cameraX) / 103) - 1 -- -1, 0, 1
+		if cameraLocationX < 1 then
 			result[maxIndex + 3] = 1
+		else
+			result[maxIndex + 3] = -1
 		end
-		if cameraY > 0 and cameraY < 255 then
+		if (cameraY > 0 and cameraY < 256)  or (cameraY == 256 and playerY < 408) then
 			result[maxIndex + 4] = -1
 		end
+	end
+
+	-- If aiming someone, but no order to move vertically and stuck in a diagonal edge, move down
+	if result[maxIndex + 4] == 0 and (cameraY == 256 and playerY < 408) then
+		result[maxIndex + 4] = -1
 	end
 
 	-- One extra input for clock toggle...
@@ -431,20 +443,20 @@ end
 local function checkEndCondition()
 	-- End if game-over (lives < 0 or no longer in game mode)
 	if read(0xEF82) < 0 or readByte(0xFC03) ~= 0x14 then
-		print("Game Over: lives " .. read(0xEF82) .. " and state is " .. readByte(0xFC03))
+		-- print("Game Over: lives " .. read(0xEF82) .. " and state is " .. readByte(0xFC03))
 		return true
 	end
 	-- First checkpoint: must pick life
-	if read(0xFC22) < -30 and read(0xFC22) > -40 and read(0xF700) ~= 0 then
-		print("Didn't pick life.")
+	if read(0xEF96) < 50 and read(0xFC22) < -30 and read(0xFC22) > -40 and read(0xF700) ~= 0 then
+		-- print("Didn't pick life.")
 		return true
 	end
-	if read(0xFC22) < -320 and read(0xFC22) > -360 and read(0xF780) ~= 0 then
-		print("Didn't pick cash bag.")
+	if read(0xEF96) < 50 and read(0xFC22) < -320 and read(0xFC22) > -360 and read(0xF780) ~= 0 then
+		-- print("Didn't pick cash bag.")
 		return true
 	end
 	if read(0xEF4C) == 7 and (read(0xEF82) < 3 or read(0xEF96) < 40) then
-		print("Scored " .. read(0xEF96) .. ". Must do better than that")
+		-- print("Scored " .. read(0xEF96) .. ". Must do better than that")
 		return true
 	end
 	if read(0xEF4C) >= EnemiesToKill then
@@ -454,6 +466,9 @@ local function checkEndCondition()
 	-- Only end if clock is counting
 	local clock = read(0xFC3C)
 	if clock == previousClock then
+		iddleTimer = 0
+		noAttackTimer = 0
+		noEnemiesTimer = 0
 		return false
 	end
 	gameplayTime = gameplayTime + 1
@@ -465,7 +480,7 @@ local function checkEndCondition()
 			noAttackTimer = 0
 		else
 			if noAttackTimer > NoAttackMaxTime then
-				print("No attack timeout")
+				-- print("No attack timeout")
 				return true
 			end
 			noAttackTimer = noAttackTimer + 1
@@ -477,14 +492,14 @@ local function checkEndCondition()
 			iddleTimer = 0
 		else
 			if iddleTimer > MaxIdleTime then
-				print("Iddle timeout")
+				-- print("Iddle timeout")
 				return true
 			end
 			iddleTimer = iddleTimer + 1
 		end
 		-- if there are no enemies, must look for them
 		if noEnemiesTimer > NoEnemiesMaxTime then
-			print("No enemies timeout")
+			-- print("No enemies timeout")
 			return true
 		end
 		noEnemiesTimer = noEnemiesTimer + 1

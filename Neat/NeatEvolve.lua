@@ -918,10 +918,10 @@ module.run = function(userSetup)
 			if fitness > pool.maxFitness then
 				pool.maxFitness = fitness
 				saveFile()
+				console.writeline("Gen " .. pool.generation .. " species " .. pool.currentSpecies .. " genome " .. pool.currentGenome .. " fitness: " .. fitness)
 			elseif totalRuns % user.SaveFrequency == 0 then
 				saveFile()
 			end
-			console.writeline("Gen " .. pool.generation .. " species " .. pool.currentSpecies .. " genome " .. pool.currentGenome .. " fitness: " .. fitness)
 
 			-- Setup next genome
 			pool.currentSpecies = 1
