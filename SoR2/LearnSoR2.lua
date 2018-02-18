@@ -473,16 +473,23 @@ user.consumeOutputFunction = function(outputs)
 		return
 	end
 	controls = {}
-	-- Attack, Jump, A+B
+	-- Attack, Jump, A+B, A
 	if outputs[1] > 0.3 then
 		controls["P1 B"] = true
 		controls["P1 C"] = false
+		controls["P1 A"] = false
 	elseif outputs[1] < -0.3 then
 		controls["P1 B"] = false
 		controls["P1 C"] = true
-	elseif outputs[1] ~= 0 then -- x >= -0.3 && x <= 0.3
+		controls["P1 A"] = false
+	elseif outputs[1] > 0 then -- x >= -0.3 && x <= 0.3
 		controls["P1 B"] = true
 		controls["P1 C"] = true
+		controls["P1 A"] = false
+	elseif outputs[1] < 0 then -- x >= -0.3 && x <= 0.3
+		controls["P1 B"] = false
+		controls["P1 C"] = false
+		controls["P1 A"] = true
 	end
 	-- Left / Right
 	if outputs[2] > 0 then
@@ -502,7 +509,23 @@ user.consumeOutputFunction = function(outputs)
 	end
 
 	if clockIsStopped() then
-		controls["P1 B"] = math.random() > 0.75
+		if math.random() > 0.75 then
+			local rand = math.random()
+			if rand > 0.6 then
+				controls["P1 B"] = 1
+			elseif rand > 0.3 then
+				controls["P1 C"] = 1
+			elseif rand > 0.05 then
+				controls["P1 A"] = 1
+			else
+				controls["P1 Start"] = 1
+			end
+		else
+			controls["P1 B"] = false
+			controls["P1 C"] = false
+			controls["P1 A"] = false
+			controls["P1 Start"] = false
+		end
 	end
 
 	joypad.set(controls)
