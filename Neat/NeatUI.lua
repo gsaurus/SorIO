@@ -139,7 +139,7 @@ module.updateFitness = function(fitness, runEnded)
 			bestFitness = fitness
 			forms.settext(maxFitnessLabel, "Max Fitness: " .. math.floor(bestFitness))
 			-- good time to backup plot
-			backupPlot()
+			-- backupPlot()
 		end
 		appendToPlot(fitness)
 	end
@@ -206,7 +206,7 @@ end
 
 
 local function replayBestRun(neat)
-	bestFitness = neat.replayBestRun()
+	neat.replayBestRun()
 	forms.settext(maxFitnessLabel, "Max Fitness: " .. math.floor(bestFitness))
 end
 

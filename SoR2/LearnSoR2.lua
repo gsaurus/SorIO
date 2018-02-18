@@ -18,6 +18,7 @@
 
 
 local ai_input = true
+local initialFitness = 0 --3000
 
 ----------------------------------
 --      Game Specific Data      --
@@ -25,6 +26,21 @@ local ai_input = true
 
 local neat = require("Neat/NeatEvolve")
 local ui = require("Neat/NeatUI")
+
+-- neat.Population = 100
+-- neat.DeltaDisjoint = 2.0
+-- neat.DeltaWeights = 0.4
+-- neat.DeltaThreshold = 1.0
+-- neat.StaleSpecies = 5
+-- neat.MutateConnectionsChance = 0.3
+-- neat.PerturbChance = 0.9
+-- neat.CrossoverChance = 0.75
+-- neat.LinkMutationChance = 0.05
+-- neat.NodeMutationChance = 0.02
+-- neat.BiasMutationChance = 0.05
+-- neat.StepSize = 0.1
+-- neat.DisableMutationChance = 6.9
+-- neat.EnableMutationChance = 0.2
 
 local user = {}
 
@@ -46,7 +62,7 @@ user.OutputsCount = 3
 local MaxEnemies = 6
 local MaxItems	 = 6
 
-local InputFrequency = 1
+local InputFrequency = 2
 
 -- Reduce resolution to simplify neuronal activity
 local PositionDivider = 16
@@ -63,7 +79,7 @@ local previousPlayerY
 local MaxIdleTime = 360
 local iddleTimer
 -- if there are no enemies, must look for them
-local NoEnemiesMaxTime = 1200
+local NoEnemiesMaxTime = 1800
 local noEnemiesTimer
 -- if there are enemies, must attack them
 local NoAttackMaxTime = 1800 -- 1800
@@ -72,6 +88,7 @@ local previousScore -- use score to detect it
 -- Global time penalty
 local TimePenaltyPerFrame = -0.05
 local gameplayTime
+local totalFrames
 -- Health and lifes bonus
 local HealthBonusMultiplier = 20
 local LifeBonusMultiplier = 2000
@@ -79,16 +96,20 @@ local ScoreMultiplier = 13
 -- Enemy health and lifes bonus
 local EnemyHealthBonusMultiplier = -10
 local EnemyLifeBonusMultiplier = -1000
-local EnemiesCountMultiplier = 990
+local EnemiesCountMultiplier = 1000
 
-local clockToggle
+local ClosestItemMultiplier = -0.05
 
 
-local minDeltaY = 9
+local minDeltaY = 8
 local minDeltaXForContainer = 42
 
 -- Training mode
-local EnemiesToKill = 99999999 --7 -- 22 -- 1 enemy -- 31 -- 10 enemies
+local EnemiesToKill = 999999999 --7 -- 22 -- 1 enemy -- 30 -- 10 enemies
+local MaxLevel = 1
+local totalEnemiesSpawn = 0
+local totalEnemiesKilled = 0
+local previousEnemiesInRam = {}
 
 
 ----------------------------------
@@ -131,19 +152,40 @@ user.onInitializeFunction = function()
 	noAttackTimer = 0
 	previousScore = 0
 	gameplayTime = 0
-	clockToggle = false
+	totalFrames = 0
+	totalEnemiesSpawn = 0
+	totalEnemiesKilled = 0
+	previousEnemiesInRam = {}
 	clearJoypad()
 end
 
 
 -- Read information from game's RAM --
 
+local function readFromMemory(address, func)
+	local result = 0
+	local retries = 0
+	repeat
+		local success, error = pcall(function()
+			result = func(address)
+		end)
+		if not success then
+			print("read error: " .. error)
+			retries = retries + 1
+			if retries > 3 then
+				success = true
+			end
+		end
+	until success
+	return result
+end
+
 local function read(address)
-	return mainmemory.read_s16_be(address)
+	return readFromMemory(address, mainmemory.read_s16_be)
 end
 
 local function readByte(address)
-	return mainmemory.readbyte(address)
+	return readFromMemory(address, mainmemory.readbyte)
 end
 
 
@@ -161,11 +203,17 @@ end
 
 local function readEnemyState(base, playerX, playerY)
 	local state = read(base)
-	if state == 0 then
+	if state == 0 or isInvincible(base) then
 		return CellType.Empty
 	end
+	local animationId = read(base + 0x10)
+	-- Barbon making coktail...
+	if read(base) == 0x22 and animationId == 0x20 then
+		return CellType.Empty
+	end
+
 	local dx, dy = readDeltaPos(base)
-	local isAttacking = read(base + 0x10) >= 0x30 -- Is using an agressive animation
+	local isAttacking = animationId >= 0x30 -- Is using an agressive animation
 	local inTheAir = read(base + 0x5E) < 0
 	-- local isGrabbed = bit.check(state, 3)
 	state = CellType.Enemy
@@ -230,12 +278,17 @@ end
 local closestItemDistance = 0
 
 
+local function clockIsStopped()
+	local clock = read(0xFC3C)
+	return clock == previousClock
+end
+
+
 -- return an array containing input values
 user.produceInputFunction = function(forceProduce)
 	-- If clock is not counting, no need for input
-	local clock = read(0xFC3C)
-	if not forceProduce and (clock == previousClock or clock % InputFrequency ~= 0) then
-		ui.updateInput()
+	if not forceProduce and (clockIsStopped() or totalFrames % InputFrequency ~= 0) then
+		if ui ~= nil then ui.updateInput() end
 		return nil
 	end
 	local playerX, playerY = readDeltaPos(0xEF00)
@@ -260,9 +313,25 @@ user.produceInputFunction = function(forceProduce)
 	-- enemies
 	for i = 0, MaxEnemies - 1 do
 		state, x, y = readEnemyState(0xF100 + i * 0x100)
-		-- if i ~= 4 then
-		-- 	mainmemory.write_s16_be(0xF100 + i * 0x100, 0)
-		-- end
+
+		if read(0xF100 + i * 0x100) ~= 0 then
+			if not previousEnemiesInRam[i] then
+				totalEnemiesSpawn = totalEnemiesSpawn + 1
+				if not neat.isReplayingBestRun() and totalEnemiesSpawn > EnemiesToKill then
+					for k = 0, 0x80, 0x2 do
+						mainmemory.write_s16_be(0xF100 + i * 0x100 + k, 0)
+					end
+				else
+					previousEnemiesInRam[i] = true
+				end
+			end
+		else
+			if previousEnemiesInRam[i] then
+				totalEnemiesKilled = totalEnemiesKilled + 1
+				previousEnemiesInRam[i] = false
+			end
+		end
+
 		if state ~= 0 then
 			local ex = x + cameraX
 			x = x - playerX
@@ -310,7 +379,7 @@ user.produceInputFunction = function(forceProduce)
 				if x >= -MatrixRangeX and x <= MatrixRangeX then
 					local current = result[coordinatesToIndex(x)]
 					if current == CellType.Empty or state < current then
-						if state ~= CellType.Goodie or math.abs(x) <= 1 then
+						if state ~= CellType.Goodie or math.abs(x) < 1 then
 							result[coordinatesToIndex(x)] = state
 						end
 					end
@@ -377,22 +446,32 @@ user.produceInputFunction = function(forceProduce)
 	end
 
 	-- If aiming someone, but no order to move vertically and stuck in a diagonal edge, move down
-	if result[maxIndex + 4] == 0 and (cameraY == 256 and playerY < 408) then
+	if result[maxIndex + 4] == 0 and (cameraY == 256 and playerY < 410) then
 		result[maxIndex + 4] = -1
 	end
 
 	-- One extra input for clock toggle...
-	result[maxIndex + 5] = clockToggle and 1 or 0
-	clockToggle = not clockToggle
+	result[maxIndex + 5] = math.random() * 2 - 1
 
-	ui.updateInput(result)
+	if ui ~= nil then ui.updateInput(result) end
 	return result
+end
+
+
+local function updateVariables()
+	totalFrames = totalFrames + 1
+	previousClock = read(0xFC3C)	-- Clock
+	previousPlayerX = read(0xEF20)	-- X
+	previousPlayerY = read(0xEF24)	-- Y
+	previousScore = read(0xEF96)	-- Score
 end
 
 
 -- receive an array containing the output values
 user.consumeOutputFunction = function(outputs)
-	if not ai_input then return end
+	if outputs == nil or not ai_input then
+		return
+	end
 	controls = {}
 	-- Attack, Jump, A+B
 	if outputs[1] > 0.3 then
@@ -417,6 +496,15 @@ user.consumeOutputFunction = function(outputs)
 	elseif outputs[3] < 0 then
 		controls["P1 Down"] = true
 	end
+	if totalFrames % InputFrequency ~= 0 then
+		controls["P1 B"] = false
+		controls["P1 C"] = false
+	end
+
+	if clockIsStopped() then
+		controls["P1 B"] = math.random() > 0.75
+	end
+
 	joypad.set(controls)
 end
 
@@ -441,11 +529,27 @@ local function hasScoreIncreased()
 end
 
 local function checkEndCondition()
+	if neat.isReplayingBestRun() then return false end
 	-- End if game-over (lives < 0 or no longer in game mode)
-	if read(0xEF82) < 0 or readByte(0xFC03) ~= 0x14 then
+	if read(0xEF82) < 0 or readByte(0xFC03) ~= 0x14 or read(0xFC42) ~= 0 then
 		-- print("Game Over: lives " .. read(0xEF82) .. " and state is " .. readByte(0xFC03))
 		return true
 	end
+
+	local level = read(0xFC42)
+
+	-- Limit level
+	if level >= MaxLevel then
+		return true
+	end
+
+	-- Only apply strict rules if still at stage 1 and not replaying
+	-- Otherwise let it go until game-over
+
+	if level ~= 0 or neat.isReplayingBestRun() then
+		return false
+	end
+
 	-- First checkpoint: must pick life
 	if read(0xEF96) < 50 and read(0xFC22) < -30 and read(0xFC22) > -40 and read(0xF700) ~= 0 then
 		-- print("Didn't pick life.")
@@ -455,17 +559,13 @@ local function checkEndCondition()
 		-- print("Didn't pick cash bag.")
 		return true
 	end
-	if read(0xEF4C) == 7 and (read(0xEF82) < 3 or read(0xEF96) < 40) then
-		-- print("Scored " .. read(0xEF96) .. ". Must do better than that")
-		return true
-	end
-	if read(0xEF4C) >= EnemiesToKill then
-		print("All enemies killed")
+	if totalEnemiesKilled >= EnemiesToKill then
+		-- print("All enemies killed: " .. totalEnemiesKilled)
 		return true
 	end
 	-- Only end if clock is counting
 	local clock = read(0xFC3C)
-	if clock == previousClock then
+	if clockIsStopped() then
 		iddleTimer = 0
 		noAttackTimer = 0
 		noEnemiesTimer = 0
@@ -484,6 +584,7 @@ local function checkEndCondition()
 				return true
 			end
 			noAttackTimer = noAttackTimer + 1
+			-- if totalEnemiesKilled < 1 then noAttackTimer = noAttackTimer + 9 end
 		end
 	else
 		noAttackTimer = 0
@@ -496,6 +597,7 @@ local function checkEndCondition()
 				return true
 			end
 			iddleTimer = iddleTimer + 1
+			if totalEnemiesKilled < 1 then iddleTimer = iddleTimer + 9 end
 		end
 		-- if there are no enemies, must look for them
 		if noEnemiesTimer > NoEnemiesMaxTime then
@@ -508,21 +610,13 @@ local function checkEndCondition()
 end
 
 
-local function updateVariables()
-	previousClock = read(0xFC3C)	-- Clock
-	previousPlayerX = read(0xEF20)	-- X
-	previousPlayerY = read(0xEF24)	-- Y
-	previousScore = read(0xEF96)	-- Score
-end
-
-
 
 -- return nil to indicate that this run didn't end yet
 -- fitness value otherwise
 user.checkFinalFitnessFunction = function()
 	local fitness = nil
 	local runEnded = checkEndCondition()
-	if runEnded or ui.isRealTimeFitnessEnabled() then
+	if runEnded or (ui ~= nil and ui.isRealTimeFitnessEnabled()) then
 		-- Ended, compute final fitness
 		fitness = 0
 		-- Score
@@ -540,15 +634,17 @@ user.checkFinalFitnessFunction = function()
 			end
 		end
 		-- KO counter
-		fitness = fitness + read(0xEF4C) * EnemiesCountMultiplier
+		fitness = fitness + totalEnemiesSpawn * EnemiesCountMultiplier
 
 		-- If nothing else, at least get close to something
-		fitness = fitness - closestItemDistance
+		fitness = fitness + closestItemDistance * ClosestItemMultiplier
 
-		ui.updateFitness(fitness, runEnded)
+		fitness = initialFitness + fitness
+
+		if ui ~= nil then ui.updateFitness(fitness, runEnded and not neat.isReplayingBestRun()) end
 	end
-	updateVariables()
 	-- return fitness; only ckecking runEnded because we may be showing realtime fitness
+	updateVariables()
 	return runEnded and fitness or nil
 end
 
@@ -557,7 +653,7 @@ end
 local MapX = 160
 local MapY = 106
 function showMap(inputs)
-	local inputsCount = #inputs + 1
+	local inputsCount = #inputs
 	local backgroundColor = 0xE0FFFFFF
 	local screenWidth = client.bufferwidth()
 	local screenHeight = client.bufferheight()
@@ -635,12 +731,12 @@ function showMap(inputs)
 		cells[i] = cell
 		i = i + 1
 	end
-	local biasCell = {}
-	biasCell.x = 88
-	biasCell.y = 90
-	biasCell.value = network.neurons[inputsCount].value
-	cells[inputsCount] = biasCell
-	gui.drawText(5, biasCell.y - 8, "Bias", 0xFF000000, 9)
+	-- local biasCell = {}
+	-- biasCell.x = 88
+	-- biasCell.y = 90
+	-- biasCell.value = network.neurons[inputsCount].value
+	-- cells[inputsCount] = biasCell
+	-- gui.drawText(5, biasCell.y - 8, "Bias", 0xFF000000, 9)
 
 	local MaxNodes = neat.getSettings().MaxNodes
 	for o = 1, user.OutputsCount do
@@ -770,7 +866,7 @@ end
 
 function onExit()
 	neat.onExit()
-	ui.onExit()
+	if ui ~= nil then ui.onExit() end
 end
 event.onexit(onExit)
 

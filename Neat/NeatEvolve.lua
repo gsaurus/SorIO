@@ -55,12 +55,12 @@ user.PerturbChance = 0.90
 user.CrossoverChance = 0.75
 user.LinkMutationChance = 2.0
 user.NodeMutationChance = 0.50
-user.BiasMutationChance = 0.40
+-- user.BiasMutationChance = 0.40
 user.StepSize = 0.1
 user.DisableMutationChance = 0.4
 user.EnableMutationChance = 0.2
 user.MaxNodes = 1000000
-user.SaveFrequency = 20
+user.SaveFrequency = 10
 
 
 
@@ -69,7 +69,9 @@ user.SaveFrequency = 20
 local pool = nil
 local outputs
 local totalRuns = 0
-local markedToSave = false;
+local markedToSave = false
+local markedToReplay = false
+local replayingBest = false
 
 
 
@@ -78,6 +80,25 @@ local markedToSave = false;
 ----------------------------------
 ----------------------------------
 
+module.isReplayingBestRun = function()
+	return replayingBest
+end
+
+-- deep clone table
+function clone(orig)
+    local orig_type = type(orig)
+    local copy
+    if orig_type == 'table' then
+        copy = {}
+        for orig_key, orig_value in next, orig, nil do
+            copy[clone(orig_key)] = clone(orig_value)
+        end
+        setmetatable(copy, clone(getmetatable(orig)))
+    else
+        copy = orig
+    end
+    return copy
+end
 
 
 module.sigmoid = function(x)
@@ -121,7 +142,7 @@ local function newGenome()
 	local mRates = genome.mutationRates
 	mRates.connections = user.MutateConnectionsChance
 	mRates.link = user.LinkMutationChance
-	mRates.bias = user.BiasMutationChance
+	-- mRates.bias = user.BiasMutationChance
 	mRates.node = user.NodeMutationChance
 	mRates.enable = user.EnableMutationChance
 	mRates.disable = user.DisableMutationChance
@@ -140,36 +161,6 @@ local function newGene()
 	gene.innovation = 0
 
 	return gene
-end
-
-
-local function copyGene(gene)
-	local gene2 = newGene()
-	gene2.into = gene.into
-	gene2.out = gene.out
-	gene2.weight = gene.weight
-	gene2.enabled = gene.enabled
-	gene2.innovation = gene.innovation
-
-	return gene2
-end
-
-local function copyGenome(genome)
-	local genome2 = newGenome()
-	for g=1,#genome.genes do
-		table.insert(genome2.genes, copyGene(genome.genes[g]))
-	end
-	genome2.maxneuron = genome.maxneuron
-	local mRates1 = genome.mutationRates
-	local mRates2 = genome2.mutationRates
-	mRates2.connections = mRates1.connections
-	mRates2.link = mRates1.link
-	mRates2.bias = mRates1.bias
-	mRates2.node = mRates1.node
-	mRates2.enable = mRates1.enable
-	mRates2.disable = mRates1.disable
-
-	return genome2
 end
 
 
@@ -214,7 +205,7 @@ local function generateNetwork(genome)
 end
 
 function evaluateNetwork(network, inputs)
-	table.insert(inputs, 1)
+	-- table.insert(inputs, 1)
 	if #inputs ~= user.InputsCount then
 		console.writeline("Incorrect number of neural network inputs: got " .. (#inputs - 1) .. ", expected " .. (user.InputsCount - 1))
 		return {}
@@ -265,9 +256,9 @@ local function crossover(g1, g2)
 		local gene1 = g1.genes[i]
 		local gene2 = innovations2[gene1.innovation]
 		if gene2 ~= nil and math.random(2) == 1 and gene2.enabled then
-			table.insert(child.genes, copyGene(gene2))
+			table.insert(child.genes, clone(gene2))
 		else
-			table.insert(child.genes, copyGene(gene1))
+			table.insert(child.genes, clone(gene1))
 		end
 	end
 
@@ -355,9 +346,9 @@ local function linkMutate(genome, forceBias)
 
 	newLink.into = neuron1
 	newLink.out = neuron2
-	if forceBias then
-		newLink.into = user.InputsCount
-	end
+	-- if forceBias then
+	-- 	newLink.into = user.InputsCount
+	-- end
 
 	if containsLink(genome.genes, newLink) then
 		return
@@ -381,14 +372,14 @@ local function nodeMutate(genome)
 	end
 	gene.enabled = false
 
-	local gene1 = copyGene(gene)
+	local gene1 = clone(gene)
 	gene1.out = genome.maxneuron
 	gene1.weight = 1.0
 	gene1.innovation = newInnovation()
 	gene1.enabled = true
 	table.insert(genome.genes, gene1)
 
-	local gene2 = copyGene(gene)
+	local gene2 = clone(gene)
 	gene2.into = genome.maxneuron
 	gene2.innovation = newInnovation()
 	gene2.enabled = true
@@ -432,13 +423,13 @@ local function mutate(genome)
 		p = p - 1
 	end
 
-	p = genome.mutationRates.bias
-	while p > 0 do
-		if math.random() < p then
-			linkMutate(genome, true)
-		end
-		p = p - 1
-	end
+	-- p = genome.mutationRates.bias
+	-- while p > 0 do
+	-- 	if math.random() < p then
+	-- 		linkMutate(genome, true)
+	-- 	end
+	-- 	p = p - 1
+	-- end
 
 	p = genome.mutationRates.node
 	while p > 0 do
@@ -601,7 +592,7 @@ local function breedChild(species)
 		child = crossover(g1, g2)
 	else
 		g = species.genomes[math.random(1, #species.genomes)]
-		child = copyGenome(g)
+		child = clone(g)
 	end
 
 	mutate(child)
@@ -696,7 +687,7 @@ local function newGeneration()
 	end
 
 	pool.generation = pool.generation + 1
-
+	console.writeline("New generation " .. pool.generation .. ". Best fitness so far " .. pool.maxFitness)
 end
 
 
@@ -707,13 +698,12 @@ module.getCurrentGenome = function()
 end
 
 local function initializeRun()
-
 	-- call initialization callback
 	user.onInitializeFunction()
 
 	-- Restart pool
 	generateNetwork(module.getCurrentGenome())
-
+	replayingBest = false
 end
 
 
@@ -839,6 +829,11 @@ end
 
 
 module.replayBestRun = function()
+	markedToReplay = true
+end
+
+local function replayBest()
+	markedToReplay = false
 	local maxfitness = 0
 	local maxs, maxg
 	for s,species in pairs(pool.species) do
@@ -855,6 +850,7 @@ module.replayBestRun = function()
 	pool.currentGenome = maxg
 	pool.maxFitness = maxfitness
 	initializeRun()
+	replayingBest = true
 	print("Replaying fitness " .. pool.maxFitness)
 	return pool.maxFitness
 end
@@ -867,9 +863,7 @@ local function evaluateCurrent()
 	if inputs ~= nil then
 		outputs = evaluateNetwork(genome.network, inputs)
 	end
-	if outputs ~= nil then
-		user.consumeOutputFunction(outputs)
-	end
+	user.consumeOutputFunction(outputs)
 end
 
 
@@ -895,7 +889,7 @@ module.run = function(userSetup)
 		local inputs = user.produceInputFunction(true)
 		user.InputsCount = #inputs
 	end
-	user.InputsCount = user.InputsCount + 1
+	-- user.InputsCount = user.InputsCount + 1
 
 	-- Load pool or create new one
 	loadFile(user.SaveLoadFile)
@@ -907,20 +901,28 @@ module.run = function(userSetup)
 	-- Loop
 	while true do
 
+		if markedToReplay then
+			replayBest()
+		end
+
 		local genome = module.getCurrentGenome()
 
 		evaluateCurrent()
 		local fitness = user.checkFinalFitnessFunction()
 
 		if fitness ~= nil then
-			genome.fitness = fitness
-			totalRuns = totalRuns + 1
-			if fitness > pool.maxFitness then
-				pool.maxFitness = fitness
-				saveFile()
-				console.writeline("Gen " .. pool.generation .. " species " .. pool.currentSpecies .. " genome " .. pool.currentGenome .. " fitness: " .. fitness)
-			elseif totalRuns % user.SaveFrequency == 0 then
-				saveFile()
+			if not replayingBest then
+				genome.fitness = fitness
+				totalRuns = totalRuns + 1
+				if fitness > pool.maxFitness then
+					pool.maxFitness = fitness
+					saveFile()
+					console.writeline("Gen " .. pool.generation .. " species " .. pool.currentSpecies .. " genome " .. pool.currentGenome .. " fitness: " .. fitness)
+				elseif totalRuns % user.SaveFrequency == 0 then
+					saveFile()
+				end
+			else
+				console.writeline("Replay ended with fitness " .. fitness)
 			end
 
 			-- Setup next genome
@@ -936,7 +938,6 @@ module.run = function(userSetup)
 		if markedToSave then
 			saveFile()
 		end
-
 		emu.frameadvance()
 	end
 end
