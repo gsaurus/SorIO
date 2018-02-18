@@ -106,7 +106,7 @@ local minDeltaXForContainer = 42
 
 -- Training mode
 local EnemiesToKill = 999999999 --7 -- 22 -- 1 enemy -- 30 -- 10 enemies
-local MaxLevel = 1
+local MaxLevel = 99
 local totalEnemiesSpawn = 0
 local totalEnemiesKilled = 0
 local previousEnemiesInRam = {}
@@ -531,7 +531,7 @@ end
 local function checkEndCondition()
 	if neat.isReplayingBestRun() then return false end
 	-- End if game-over (lives < 0 or no longer in game mode)
-	if read(0xEF82) < 0 or readByte(0xFC03) ~= 0x14 or read(0xFC42) ~= 0 then
+	if read(0xEF82) < 0 or readByte(0xFC03) ~= 0x14 then
 		-- print("Game Over: lives " .. read(0xEF82) .. " and state is " .. readByte(0xFC03))
 		return true
 	end
