@@ -54,6 +54,7 @@ CellType = {
 	Enemy = -0.3,
 	AttackingEnemy = -0.6,
 	FlyingEnemy = -0.9,
+	Weapon = 0.9,
 }
 
 -- how many output values
@@ -101,7 +102,7 @@ local EnemiesCountMultiplier = 1000
 local ClosestItemMultiplier = -0.05
 
 
-local minDeltaY = 8
+local minDeltaY = 7
 local minDeltaXForContainer = 42
 
 -- Training mode
@@ -231,7 +232,7 @@ local function readPlayerState(base)
 	if state == 0 or isInvincible(base) then
 		return -1
 	end
-	local hasWeapon = read(base + 0x38) ~= 0 -- Weapon
+	local hasWeapon = bit.check(read(base + 0x32), 0) -- Weapon
 	local animation = read(base + 0x10)
 	if animation == 0x8 then
 		-- grabbing someone
@@ -259,12 +260,15 @@ local function readItemState(base, playerX, playerY)
 	if dx == nil then return 0 end
 	local state = CellType.Empty
 	local type = read(base + 0x0C) -- Type
-	if type >= 0x4C and type <= 0x8A then
+	if (type >= 0x4C and type < 0x70) or (type > 0x76 and type <= 0x8A) then
 		-- It's a container
 		state = CellType.Container
 	elseif type >= 0x8C and type <= 0x94 then
 		-- Goodie!
 		state = CellType.Goodie
+	elseif not bit.check(readByte(base + 0x32), 0) and (type == 0x3C or type == 0x3E or type == 0x42 or type == 0x44) then
+		-- Weapon! (only if not grabbing one already)
+		state = CellType.Weapon
 	end
 	return state, dx, dy
 end
@@ -336,7 +340,7 @@ user.produceInputFunction = function(forceProduce)
 			local ex = x + cameraX
 			x = x - playerX
 			y = y - playerY
-			if ex > 0 and ex < 320 then
+			if ex > -12 and ex < 332 then
 				distance = math.sqrt(x * x + y * y * 15)
 				-- print("closest (enemy): X " .. x .. ", y " .. y .. ", distance " .. distance)
 				if distance < closestDistance then
@@ -346,7 +350,7 @@ user.produceInputFunction = function(forceProduce)
 					closestType = state
 				end
 			end
-			if math.abs(y) <= minDeltaY then
+			if math.abs(y) < minDeltaY then
 				x = math.floor(x / PositionDivider + 0.5)
 				if x >= -MatrixRangeX and x <= MatrixRangeX then
 					local current = result[coordinatesToIndex(x)]
@@ -364,22 +368,22 @@ user.produceInputFunction = function(forceProduce)
 			local ex = x + cameraX
 			x = x - playerX
 			y = y - playerY
-			if ex > 0 and ex < 320 then
+			if ex > 12 and ex < 308 then
 				distance = math.sqrt(x * x + y * y * 15)
 				--print("closest (item): X " .. x .. ", y " .. y .. ", distance " .. distance)
-				if distance < closestDistance then
+				if read(0xF70C + i * 0x80) == 0x90 or (distance < closestDistance and (state ~= CellType.Weapon or distance < closestDistance * 0.4)) then
 					closestX = x
 					closestY = y
 					closestDistance = distance
 					closestType = state
 				end
 			end
-			if math.abs(y) <= minDeltaY then
+			if math.abs(y) <= 4 then
 				x = math.floor(x / PositionDivider + 0.5)
 				if x >= -MatrixRangeX and x <= MatrixRangeX then
 					local current = result[coordinatesToIndex(x)]
 					if current == CellType.Empty or state < current then
-						if state ~= CellType.Goodie or math.abs(x) < 1 then
+						if state < CellType.Weapon or math.abs(x) < 1 then
 							result[coordinatesToIndex(x)] = state
 						end
 					end
@@ -406,16 +410,16 @@ user.produceInputFunction = function(forceProduce)
 	result[maxIndex + 4] = 0 -- vertical
 	-- print("Final closest: type " .. closestType  .. " X " .. closestX .. ", y " .. closestY .. ", distance " .. closestDistance)
 	if closestType ~= 0 then
-		if closestY >= minDeltaY then
+		if closestY > minDeltaY then
 			result[maxIndex + 4] = -1
-		elseif closestY <= -minDeltaY then
+		elseif closestY < -minDeltaY then
 			result[maxIndex + 4] = 1
 		end
 		local done = false
 		-- check if stuck on box
 		if closestType == CellType.Container then
 			-- print("container X: " .. closestX)
-			if closestX >= -minDeltaXForContainer and closestX <= minDeltaXForContainer and (closestY < -minDeltaY or closestY > minDeltaY) then
+			if closestX >= -minDeltaXForContainer and closestX <= minDeltaXForContainer and (closestY <= -minDeltaY or closestY >= minDeltaY) then
 				local obstacleX = ((realPlayerX + closestX + cameraX) / 103) - 1
 				-- print("(" .. realPlayerX .. " + " .. closestX .. " + " .. cameraX .. ") / 103) - 1 = " .. obstacleX)
 				if obstacleX >= 0 then
@@ -427,17 +431,17 @@ user.produceInputFunction = function(forceProduce)
 			end
 		end
 		if not done then
-			if closestX > 4 then
+			if closestX > 3 then
 				result[maxIndex + 3] = 1
-			elseif closestX < 4 then
+			elseif closestX < -3 then
 				result[maxIndex + 3] = -1
 			end
 		end
 	else
-		local cameraLocationX = math.floor((realPlayerX + cameraX) / 103) - 1 -- -1, 0, 1
-		if cameraLocationX < 1 then
+		local cameraLocationX = realPlayerX + cameraX
+		if cameraLocationX < 180 then
 			result[maxIndex + 3] = 1
-		else
+		elseif cameraLocationX > 190 then
 			result[maxIndex + 3] = -1
 		end
 		if (cameraY > 0 and cameraY < 256)  or (cameraY == 256 and playerY < 408) then
@@ -474,22 +478,24 @@ user.consumeOutputFunction = function(outputs)
 	end
 	controls = {}
 	-- Attack, Jump, A+B, A
+	-- Have some randomness on failing (simulate player delay / stiffness)
+	local value = math.random() > 0.6
 	if outputs[1] > 0.3 then
-		controls["P1 B"] = true
+		controls["P1 B"] = value
 		controls["P1 C"] = false
 		controls["P1 A"] = false
 	elseif outputs[1] < -0.3 then
 		controls["P1 B"] = false
-		controls["P1 C"] = true
+		controls["P1 C"] = value
 		controls["P1 A"] = false
 	elseif outputs[1] > 0 then -- x >= -0.3 && x <= 0.3
-		controls["P1 B"] = true
-		controls["P1 C"] = true
+		controls["P1 B"] = value
+		controls["P1 C"] = value
 		controls["P1 A"] = false
 	elseif outputs[1] < 0 then -- x >= -0.3 && x <= 0.3
 		controls["P1 B"] = false
 		controls["P1 C"] = false
-		controls["P1 A"] = true
+		controls["P1 A"] = value
 	end
 	-- Left / Right
 	if outputs[2] > 0 then
@@ -509,15 +515,15 @@ user.consumeOutputFunction = function(outputs)
 	end
 
 	if clockIsStopped() then
-		if math.random() > 0.75 then
+		if math.random() > 0.95 then
 			local rand = math.random()
-			if rand > 0.6 then
+			if rand > 0.5 then
 				controls["P1 B"] = 1
-			elseif rand > 0.3 then
+			elseif rand > 0.07 then
 				controls["P1 C"] = 1
 			elseif rand > 0.05 then
 				controls["P1 A"] = 1
-			else
+			elseif read(0xEF82) < 0 then
 				controls["P1 Start"] = 1
 			end
 		else
@@ -693,7 +699,7 @@ function showMap(inputs)
 	-- Player
 	cell = {}
 	cell.x = MapX
-	cell.y = MapY
+	cell.y = MapY - 4
 	cell.value = network.neurons[maxIndex + 1].value
 	cell.color = cell.value * 0x55000000 + 0x00FF00FF
 	cells[maxIndex + 1] = cell
